@@ -1,6 +1,7 @@
-# kanban-day-gantt
+# kanban-live-gantt
 
-Desktop **day view** for the Hermes kanban boards — a fork of the
+Desktop **live Gantt view** for the Hermes kanban boards — a now-centered,
+slidable timeline; a fork of the
 [`kanban-gantt`](https://github.com/e-is/hermes-kanban-gantt) plugin (same
 layout: `src/main.ts` + `src/core/gantt-core.ts`, built by `scripts/build.mjs`
 into `desktop/plugin.js` + `desktop/gantt-core.js`). Licensed **GPL-3.0** —
@@ -8,7 +9,7 @@ see [Credits & license](#credits--license).
 
 ## What it changes vs `kanban-gantt`
 
-| | kanban-gantt | kanban-day-gantt (this) |
+| | kanban-gantt | kanban-live-gantt (this) |
 |---|---|---|
 | Statuses shown | all (incl. done / archived) | **open work by default; done optional** ("Done" entry in the status filter, default off; archived never) |
 | Timeline domain | data-driven, **loops over ≥7 days (1 week)** | **slidable 72 h: default now − 24 h → now + 48 h** (local wall clock) — drag the ruler to move it, drag its ends to move start/end |
@@ -47,13 +48,13 @@ npm test             # core unit tests + UI smoke
 
 The plugin is a two-half package, like `kanban-gantt`:
 
-1. **desktop half** — `~/.hermes/plugins/kanban-day-gantt/desktop/plugin.js` is
-   materialized by the desktop app into `~/.hermes/desktop-plugins/kanban-day-gantt/`
+1. **desktop half** — `~/.hermes/plugins/kanban-live-gantt/desktop/plugin.js` is
+   materialized by the desktop app into `~/.hermes/desktop-plugins/kanban-live-gantt/`
    (local, non-marketplace package → **opt-in**: enable it in the app's plugin list).
 2. **backend half** — `dashboard/plugin_api.py` is mounted at
-   `/api/plugins/kanban-day-gantt/` **at serve-process start**; after adding the
+   `/api/plugins/kanban-live-gantt/` **at serve-process start**; after adding the
    plugin, restart the app backend (or restart the desktop app) so the route mounts.
-   `plugins.enabled` in `~/.hermes/config.yaml` must include `kanban-day-gantt`.
+   `plugins.enabled` in `~/.hermes/config.yaml` must include `kanban-live-gantt`.
 
 ## Window semantics
 
@@ -100,7 +101,9 @@ Fork of **kanban-gantt** (c) e-is (Benoit Lavenier) —
 This is a modified work distributed under the same license (GPL-3.0 change
 notice: modified 2026-09-29 by **ningfangbin**).
 
-Changes in this fork: status-filter "Done" lane (open work by default), rolling
-48 h window replacing the fixed day-count window, wheel zoom with hour ticks
-replacing the zoom slider, now-line, local-midnight day cells, **en + zh**
-i18n replacing en + fr, plugin renamed to `kanban-day-gantt`.
+Changes in this fork: status-filter "Done" lane (open work by default), a
+now-centered slidable 72 h window (default −24 h → +48 h; drag to move, drag
+the ends to resize) replacing the fixed day-count window, wheel zoom with hour
+ticks replacing the zoom slider, now-line, local-midnight day cells, **en + zh**
+i18n replacing en + fr, plugin renamed to `kanban-live-gantt` (from the working
+name `kanban-day-gantt`, which predated the slidable window).

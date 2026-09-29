@@ -34,7 +34,7 @@ await build({
   banner: {
     js: [
       '/*',
-      ' * Hermes Kanban Day Gantt — desktop renderer (BUILD ARTIFACT).',
+      ' * Hermes Kanban Live Gantt — desktop renderer (BUILD ARTIFACT).',
       ' * Source of truth: src/ — run `npm run build` after editing.',
       ' * Loaded uncompiled by Hermes Desktop; only @hermes/plugin-sdk, react',
       ' * and react/jsx-runtime are importable specifiers.',

@@ -4,7 +4,7 @@
  *   1. loader import-scan — only @hermes/plugin-sdk, react, react/jsx-runtime;
  *   2. import + register() against a stubbed ctx — page / nav / palette areas;
  *   3. render the page with stubbed queries (fixtures anchored to NOW):
- *      the day view must show non-done tasks and hide done/archived ones.
+ *      the live view must show non-done tasks and hide done/archived ones.
  *
  * Run: node tests/ui/esm-render.mjs   (after npm run build)
  */
@@ -56,16 +56,16 @@ const atom = initial => {
 }
 
 const stubQueryData = {
-  'kanban-day-gantt|boards': boards,
-  'kanban-day-gantt|gantt': gantt
+  'kanban-live-gantt|boards': boards,
+  'kanban-live-gantt|gantt': gantt
 }
 
 const useQueryStubSource = `const stubQueryData = ${JSON.stringify(stubQueryData)}
 export const useQuery = options => {
   const key = options && Array.isArray(options.queryKey) ? options.queryKey.join('|') : ''
   let data
-  if (key.includes('|boards')) data = stubQueryData['kanban-day-gantt|boards']
-  else if (key.includes('|gantt')) data = stubQueryData['kanban-day-gantt|gantt']
+  if (key.includes('|boards')) data = stubQueryData['kanban-live-gantt|boards']
+  else if (key.includes('|gantt')) data = stubQueryData['kanban-live-gantt|gantt']
   return { data, isLoading: false, isError: false, error: null, refetch: async () => {} }
 }`
 
@@ -228,7 +228,7 @@ try {
   process.exit(1)
 }
 
-check(plugin.id === 'kanban-day-gantt', 'plugin id is kanban-day-gantt')
+check(plugin.id === 'kanban-live-gantt', 'plugin id is kanban-live-gantt')
 check(typeof plugin.register === 'function', 'register is a function')
 
 const contributions = []
@@ -263,11 +263,11 @@ check(areas.includes('sidebar.nav'), 'SIDEBAR_NAV_AREA contribution')
 check(areas.filter(a => a === 'palette').length === 1, 'one PALETTE_AREA command')
 
 const page = contributions.find(c => c.area === 'routes')
-check(page && page.data && page.data.path === '/kanban-day-gantt', 'page path /kanban-day-gantt')
+check(page && page.data && page.data.path === '/kanban-live-gantt', 'page path /kanban-live-gantt')
 const nav = contributions.find(c => c.area === 'sidebar.nav')
-check(nav && nav.data && nav.data.path === '/kanban-day-gantt', 'nav path /kanban-day-gantt')
+check(nav && nav.data && nav.data.path === '/kanban-live-gantt', 'nav path /kanban-live-gantt')
 const palette = contributions.find(c => c.area === 'palette')
-check(palette && palette.data && palette.data.id === 'kanbanDayGantt.open', 'palette command id kanbanDayGantt.open')
+check(palette && palette.data && palette.data.id === 'kanbanLiveGantt.open', 'palette command id kanbanLiveGantt.open')
 check(styleElements.length >= 1 || true, 'register injected page style (shim)')
 
 // ---------------------------------------------------------------------------
@@ -290,8 +290,8 @@ if (pageNode) {
   }
   check(flat.includes('Running task (today)'), 'page renders non-done task titles')
   check(flat.includes('Todo created today'), 'page renders a todo created today')
-  check(!flat.includes('DONE task must be hidden'), 'done task is filtered OUT of the day view')
-  check(!flat.includes('ARCHIVED task must be hidden'), 'archived task is filtered OUT of the day view')
+  check(!flat.includes('DONE task must be hidden'), 'done task is filtered OUT of the live view')
+  check(!flat.includes('ARCHIVED task must be hidden'), 'archived task is filtered OUT of the live view')
   const hourLabels = flat.match(/\b\d{2}:00\b/g) || []
   check(hourLabels.length >= 3, 'zoomed render shows hour tick labels (' + hourLabels.slice(0, 4).join(' ') + ')')
   check(flat.includes('cursor-col-resize'), 'ruler renders the window end handles (drag to move start/end)')

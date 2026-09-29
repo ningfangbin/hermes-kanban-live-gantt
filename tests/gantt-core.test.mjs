@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Core unit tests for the kanban-day-gantt timeline logic.
+ * Core unit tests for the kanban-live-gantt timeline logic.
  * Imports the BUILT module (desktop/gantt-core.js) so tests run against the
  * exact shipped code. Run: npm run build && node --test tests/gantt-core.test.mjs
  */
@@ -15,7 +15,7 @@ import {
 
 const NOW = 1_800_000_000 // fixed clock for the pure logic tests
 
-test('isActive — done and archived never show in the day view', () => {
+test('isActive — done and archived never show in the live view', () => {
   assert.equal(isActive({ status: 'running' }), true)
   assert.equal(isActive({ status: 'todo' }), true)
   assert.equal(isActive({ status: 'blocked' }), true)

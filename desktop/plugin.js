@@ -1,5 +1,5 @@
 /*
- * Hermes Kanban Day Gantt — desktop renderer (BUILD ARTIFACT).
+ * Hermes Kanban Live Gantt — desktop renderer (BUILD ARTIFACT).
  * Source of truth: src/ — run `npm run build` after editing.
  * Loaded uncompiled by Hermes Desktop; only @hermes/plugin-sdk, react
  * and react/jsx-runtime are importable specifiers.
@@ -213,7 +213,7 @@ function hourTickPlan(min, max, pxPerSec) {
 }
 
 // src/main.ts
-var ID = "kanban-day-gantt";
+var ID = "kanban-live-gantt";
 var LABEL_W = 300;
 var ROW_H = 28;
 var BAR_H = 14;
@@ -795,9 +795,9 @@ function HourLines({ min, max, pxPerSec }) {
 }
 var GANTT_LOCALES = {
   en: {
-    title: "Kanban Day",
-    nav: "Kanban Day",
-    openCommand: "Kanban Day Gantt: open day view",
+    title: "Kanban Live",
+    nav: "Kanban Live",
+    openCommand: "Kanban Live Gantt: open the now-centered timeline",
     refresh: "Refresh",
     backend: "Backend:",
     allBoards: "All boards",
@@ -819,7 +819,7 @@ var GANTT_LOCALES = {
     emptyBoard: "No data",
     emptyBoardDesc: (board) => `Board ${board} has no open tasks.`,
     cannotLoadBoard: "Cannot load board",
-    cannotLoadBoardDesc: (base) => `Backend kanban-day-gantt unreachable${base ? ` (${base})` : ""} — plugin enabled? app backend restarted?`,
+    cannotLoadBoardDesc: (base) => `Backend kanban-live-gantt unreachable${base ? ` (${base})` : ""} — plugin enabled? app backend restarted?`,
     taskUnreadable: "Task unreadable",
     taskUnreadableDesc: "Backend did not respond.",
     nTasksTotal: (n, status) => `${n} open task${n > 1 ? "s" : ""} (dominant priority: ${status})`,
@@ -898,9 +898,9 @@ var GANTT_LOCALES = {
     }
   },
   zh: {
-    title: "看板日视图",
-    nav: "看板日视图",
-    openCommand: "看板日视图：打开今天起的任务时间线",
+    title: "看板实时甘特图",
+    nav: "看板实时甘特图",
+    openCommand: "看板实时甘特图：打开以现在为中心的任务时间线",
     refresh: "刷新",
     backend: "后端：",
     allBoards: "全部看板",
@@ -922,7 +922,7 @@ var GANTT_LOCALES = {
     emptyBoard: "无数据",
     emptyBoardDesc: (board) => `看板 ${board} 没有未完成任务。`,
     cannotLoadBoard: "无法加载看板",
-    cannotLoadBoardDesc: (base) => `后端 kanban-day-gantt 不可达${base ? `（${base}）` : ""} — 插件已启用？应用后端已重启？`,
+    cannotLoadBoardDesc: (base) => `后端 kanban-live-gantt 不可达${base ? `（${base}）` : ""} — 插件已启用？应用后端已重启？`,
     taskUnreadable: "任务信息不可读",
     taskUnreadableDesc: "后端没有响应。",
     nTasksTotal: (n, status) => `${n} 个未完成任务（主状态：${status}）`,
@@ -1283,7 +1283,7 @@ function TaskDrawer({ taskId, board, onClose, assignees = [], docked = false, on
   const scrollContainerRef = useRef(null);
   const prevTaskIdRef = useRef(null);
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["kanban-day-gantt", "task", apiBase(), board, taskId],
+    queryKey: ["kanban-live-gantt", "task", apiBase(), board, taskId],
     queryFn: () => fetchTask(taskId, board),
     enabled: Boolean(taskId)
   });
@@ -1308,7 +1308,7 @@ function TaskDrawer({ taskId, board, onClose, assignees = [], docked = false, on
     onSuccess: () => {
       setActionError(null);
       void refetch();
-      void queryClient.invalidateQueries({ queryKey: ["kanban-day-gantt", "gantt"] });
+      void queryClient.invalidateQueries({ queryKey: ["kanban-live-gantt", "gantt"] });
     },
     onError: (error) => setActionError(String(error?.message || error))
   });
@@ -1331,7 +1331,7 @@ function TaskDrawer({ taskId, board, onClose, assignees = [], docked = false, on
     onSuccess: () => {
       setActionError(null);
       void refetch();
-      void queryClient.invalidateQueries({ queryKey: ["kanban-day-gantt", "gantt"] });
+      void queryClient.invalidateQueries({ queryKey: ["kanban-live-gantt", "gantt"] });
     },
     onError: (error) => setActionError(String(error?.message || error))
   });
@@ -1626,7 +1626,7 @@ function TitlebarBoardSwitcher() {
   const i18n = useGanttI18n();
   const queryClient2 = useQueryClient();
   const { data } = useQuery({
-    queryKey: ["kanban-day-gantt", "boards", apiBase()],
+    queryKey: ["kanban-live-gantt", "boards", apiBase()],
     queryFn: () => apiFetch("/boards"),
     refetchInterval: 5 * 6e4
   });
@@ -1636,7 +1636,7 @@ function TitlebarBoardSwitcher() {
   const setBoard = (slug) => {
     $boardSlug.set(slug);
     if (storage) storage.set("board", slug);
-    void queryClient2.invalidateQueries({ queryKey: ["kanban-day-gantt", "gantt"] });
+    void queryClient2.invalidateQueries({ queryKey: ["kanban-live-gantt", "gantt"] });
   };
   return jsxs(DropdownMenu, {
     children: [
@@ -1697,12 +1697,12 @@ function KanbanGanttPage() {
   const drawerW = useValue($drawerW);
   const drawerDocked = useValue($drawerDocked);
   const { data: boardsData } = useQuery({
-    queryKey: ["kanban-day-gantt", "boards", apiBase()],
+    queryKey: ["kanban-live-gantt", "boards", apiBase()],
     queryFn: () => apiFetch("/boards"),
     refetchInterval: 5 * 6e4
   });
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["kanban-day-gantt", "gantt", apiBase(), board],
+    queryKey: ["kanban-live-gantt", "gantt", apiBase(), board],
     queryFn: () => apiFetch(`/gantt${board ? `?board=${encodeURIComponent(board)}` : ""}`),
     refetchInterval: 6e4
   });
@@ -1798,7 +1798,7 @@ function KanbanGanttPage() {
     onSuccess: () => {
       setSelectedIds(/* @__PURE__ */ new Set());
       setBulkAssignee("");
-      void queryClient2.invalidateQueries({ queryKey: ["kanban-day-gantt"] });
+      void queryClient2.invalidateQueries({ queryKey: ["kanban-live-gantt"] });
     }
   });
   const handleToggleShowDone = () => {
@@ -1812,7 +1812,7 @@ function KanbanGanttPage() {
     $boardSlug.set(slug);
     if (storage) storage.set("board", slug);
     setSearch("");
-    void queryClient2.invalidateQueries({ queryKey: ["kanban-day-gantt", "gantt"] });
+    void queryClient2.invalidateQueries({ queryKey: ["kanban-live-gantt", "gantt"] });
   };
   useEffect(() => {
     if (!board && boardsData?.boards?.length) {
@@ -2033,7 +2033,7 @@ function KanbanGanttPage() {
                     className: "rounded px-1.5 py-0.5 text-[10px] tabular-nums border border-(--ui-accent)/40 bg-(--ui-accent)/10 text-(--ui-accent) cursor-pointer",
                     children: `×${effZoom >= 10 ? Math.round(effZoom) : effZoom.toFixed(1)}`
                   }) : null,
-                  jsx(Button, { size: "xs", onClick: () => void queryClient2.invalidateQueries({ queryKey: ["kanban-day-gantt", "gantt"] }), children: i18n.refresh })
+                  jsx(Button, { size: "xs", onClick: () => void queryClient2.invalidateQueries({ queryKey: ["kanban-live-gantt", "gantt"] }), children: i18n.refresh })
                 ]
               })
             ]
@@ -2143,8 +2143,8 @@ function KanbanGanttPage() {
 }
 var plugin = {
   id: ID,
-  name: "Kanban Day Gantt",
-  description: "Day view of a Hermes kanban board — rolling 48 h window (now − 24h → now + 24h), open work by default (done optional), free wheel zoom. Local fork of kanban-gantt.",
+  name: "Kanban Live Gantt",
+  description: "Live Gantt of a Hermes kanban board — a now-centered, slidable 72 h window (default now − 24h → now + 48h), open work by default (done optional), free wheel zoom. Local fork of kanban-gantt.",
   register(ctx) {
     rest = ctx.rest;
     storage = ctx.storage;
@@ -2180,7 +2180,7 @@ var plugin = {
       {
         id: "page",
         area: ROUTES_AREA,
-        data: { path: "/kanban-day-gantt" },
+        data: { path: "/kanban-live-gantt" },
         render: () => jsx(KanbanGanttPage, {})
       }
     ]);
@@ -2189,16 +2189,16 @@ var plugin = {
         id: "nav",
         area: SIDEBAR_NAV_AREA,
         order: 70,
-        data: { codicon: "calendar", label: tr("nav", "Kanban Day"), path: "/kanban-day-gantt" }
+        data: { codicon: "calendar", label: tr("nav", "Kanban Live"), path: "/kanban-live-gantt" }
       },
       {
         id: "open",
         area: PALETTE_AREA,
         data: {
-          id: "kanbanDayGantt.open",
-          label: tr("openCommand", "Kanban Day Gantt: open day view"),
+          id: "kanbanLiveGantt.open",
+          label: tr("openCommand", "Kanban Live Gantt: open the now-centered timeline"),
           keywords: ["kanban", "gantt", "day", "today", "timeline", "日视图"],
-          run: () => host.navigate("/kanban-day-gantt")
+          run: () => host.navigate("/kanban-live-gantt")
         }
       }
     ]);

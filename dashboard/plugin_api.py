@@ -1,14 +1,14 @@
-"""kanban-day-gantt — backend for the desktop DAY view of a Hermes kanban board.
+"""kanban-live-gantt — backend for the desktop live Gantt view of a Hermes kanban board.
 
 Forked from the kanban-gantt backend — https://github.com/e-is/hermes-kanban-gantt
 — (c) e-is, GPL-3.0; modified 2026-09-29 by ningfangbin, distributed under the
-same license. Identical routes + behaviour, serving the kanban-day-gantt desktop
+same license. Identical routes + behaviour, serving the kanban-live-gantt desktop
 plugin: open work on a rolling 48 h timeline (now - 24h -> now + 24h); done
 tasks optionally, only with activity inside the window.
 
 Two run modes:
 
-1. **Plugin backend** (default) — mounted at `/api/plugins/kanban-day-gantt/` by
+1. **Plugin backend** (default) — mounted at `/api/plugins/kanban-live-gantt/` by
    the desktop/dashboard plugin system.
 2. **Standalone dev backend** — `python plugin_api.py --host H --port P` starts
    a FastAPI/uvicorn server serving `/boards` and `/gantt` at the root, so a
@@ -683,7 +683,7 @@ def assign(task_id: str, payload: AssignBody, board: Optional[str] = Query(None)
 @router.get("/meta")
 def _meta():
     return {
-        "name": "kanban-day-gantt",
+        "name": "kanban-live-gantt",
         "board": _resolve_board(None),
         "endpoint": "/gantt",
         "writes": True,
@@ -692,7 +692,7 @@ def _meta():
 
 def create_app(allow_cors: bool = True) -> FastAPI:
     """Standalone FastAPI app (dev/remote mode) serving the router at the root."""
-    app = FastAPI(title="kanban-day-gantt backend", version="2.1.0")
+    app = FastAPI(title="kanban-live-gantt backend", version="2.1.0")
     if allow_cors:
         from fastapi.middleware.cors import CORSMiddleware
 
@@ -713,14 +713,14 @@ def main() -> None:
     import uvicorn
 
     parser = argparse.ArgumentParser(
-        description="Standalone kanban-day-gantt backend (/boards, /gantt, /tasks/*).",
+        description="Standalone kanban-live-gantt backend (/boards, /gantt, /tasks/*).",
     )
     parser.add_argument("--host", default=os.environ.get("KANBAN_GANTT_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("KANBAN_GANTT_PORT", "8765")))
     parser.add_argument("--no-cors", action="store_true")
     args = parser.parse_args()
 
-    print(f"kanban-day-gantt backend on http://{args.host}:{args.port}")
+    print(f"kanban-live-gantt backend on http://{args.host}:{args.port}")
     uvicorn.run(create_app(allow_cors=not args.no_cors), host=args.host, port=args.port)
 
 

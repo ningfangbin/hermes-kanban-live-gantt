@@ -1,7 +1,7 @@
 {
-  "name": "kanban-day-gantt",
-  "label": "Kanban Day Gantt",
-  "description": "Day view of a kanban board: open work on a slidable 72 h timeline (default now -24 h -> now +48 h), hour zoom, optional done lane (backend for the kanban-day-gantt desktop plugin; fork of kanban-gantt, GPL-3.0).",
+  "name": "kanban-live-gantt",
+  "label": "Kanban Live Gantt",
+  "description": "Live Gantt of a kanban board: a now-centered, slidable 72 h timeline (default now -24 h -> now +48 h), hour zoom, optional done lane (backend for the kanban-live-gantt desktop plugin; fork of kanban-gantt, GPL-3.0).",
   "icon": "Timeline",
   "version": "0.1.0",
   "api": "plugin_api.py"

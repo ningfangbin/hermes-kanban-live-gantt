@@ -1,9 +1,9 @@
-"""Hermes Kanban Day Gantt — unified plugin package.
+"""Hermes Kanban Live Gantt — unified plugin package.
 
 A day-scale Gantt timeline (today → +N days, non-done tasks only) for the
 Hermes kanban boards. Local fork of hermes-kanban-gantt: the Python half
 lives in ``dashboard/`` (FastAPI router mounted at
-``/api/plugins/kanban-day-gantt/``) and the desktop renderer half in
+``/api/plugins/kanban-live-gantt/``) and the desktop renderer half in
 ``desktop/plugin.js`` (runtime ESM loaded by Hermes Desktop). Neither half
 registers core agent tools, hooks, or middleware — the backend only reads
 the shared kanban SQLite store — so there is no ``register()`` entry point

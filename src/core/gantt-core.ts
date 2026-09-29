@@ -1,9 +1,9 @@
-/** Pure timeline logic for the DAY view — forked from the kanban-gantt core
+/** Pure timeline logic for the live Gantt view — forked from the kanban-gantt core
  * (https://github.com/e-is/hermes-kanban-gantt — (c) e-is, GPL-3.0; modified
  * 2026-09-29 by ningfangbin, same license). No React, no SDK: this module is
  * unit-testable as-is.
  *
- * Day view = a default 72 h window, now − 24h → now + 48h (local wall clock,
+ * Live view = a default 72 h window, now − 24h → now + 48h (local wall clock,
  * never a fixed day-count window). The window itself is slidable: the helpers
  * below move it as a whole (slideWindow) or one edge at a time (resizeWindow);
  * the UI re-anchors it to "now" on refresh until the user moves it. Open work
@@ -210,7 +210,7 @@ export function barInWindow(bar, min, max) {
   return !!bar && bar.t1 != null && bar.t1 > min && bar.t0 < max;
 }
 
-/** Hour tick plan for the day view (free zoom).
+/** Hour tick plan for the live view (free zoom).
  *  major = labelled hour lines, spacing kept ≥ 56 px (step 1/2/3/6/12 h);
  *  minor = light :15/:30/:45 (deep zoom) or :30 lines, plus odd hours when
  *  the major step skips them. Both empty below ~24 px per hour, where the

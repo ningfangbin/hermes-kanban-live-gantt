@@ -1,5 +1,5 @@
 /**
- * kanban-day-gantt — desktop DAY view of a Hermes kanban board.
+ * kanban-live-gantt — desktop live Gantt view of a Hermes kanban board.
  *
  * Fork of kanban-gantt — https://github.com/e-is/hermes-kanban-gantt —
  * (c) e-is (Benoit Lavenier), GPL-3.0. Modified 2026-09-29 by ningfangbin;
@@ -22,7 +22,7 @@
  * the Node test suite (tests/gantt-core.test.mjs) imports THAT EXACT FILE,
  * so tests cover the shipped code with zero duplication.
  *
- * Data: the plugin's own backend (/api/plugins/kanban-day-gantt/*,
+ * Data: the plugin's own backend (/api/plugins/kanban-live-gantt/*,
  * dashboard/plugin_api.py — same routes as the kanban-gantt backend):
  * /boards, /gantt?board= (snapshot + parent->child graph), /tasks/<id>
  * (detail for the drawer), and write endpoints that delegate to the kanban
@@ -66,7 +66,7 @@ import {
 import { useMemo, useRef, useEffect, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
-const ID = 'kanban-day-gantt'
+const ID = 'kanban-live-gantt'
 
 const LABEL_W = 300              // px — left task-name column (sticky)
 const ROW_H = 28                 // px — row height
@@ -427,7 +427,7 @@ function ResizeHandle({ get, set, min, max, resetTo, storageKey, growDirection =
 function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onOpen, isSelected, isChecked, onToggleCheck, isEven, showBoardBadge }) {
   const i18n = useGanttI18n()
   const labelW = useValue($labelW)
-  // Day view: keep only bars overlapping the window (rows without one show "—").
+  // Live view: keep only bars overlapping the window (rows without one show "—").
   const bars = taskBars(task, now).filter(b => barInWindow(b, min, max))
   const label = task.label ? `[${task.label}]` : ''
   const name = cleanTitle(task.title, task.label, i18n.untitled)
@@ -755,9 +755,9 @@ function HourLines({ min, max, pxPerSec }) {
 
 const GANTT_LOCALES = {
   en: {
-    title: 'Kanban Day',
-    nav: 'Kanban Day',
-    openCommand: 'Kanban Day Gantt: open day view',
+    title: 'Kanban Live',
+    nav: 'Kanban Live',
+    openCommand: 'Kanban Live Gantt: open the now-centered timeline',
     refresh: 'Refresh',
     backend: 'Backend:',
     allBoards: 'All boards',
@@ -779,7 +779,7 @@ const GANTT_LOCALES = {
     emptyBoard: 'No data',
     emptyBoardDesc: board => `Board ${board} has no open tasks.`,
     cannotLoadBoard: 'Cannot load board',
-    cannotLoadBoardDesc: base => `Backend kanban-day-gantt unreachable${base ? ` (${base})` : ''} — plugin enabled? app backend restarted?`,
+    cannotLoadBoardDesc: base => `Backend kanban-live-gantt unreachable${base ? ` (${base})` : ''} — plugin enabled? app backend restarted?`,
     taskUnreadable: 'Task unreadable',
     taskUnreadableDesc: 'Backend did not respond.',
     nTasksTotal: (n, status) => `${n} open task${n > 1 ? 's' : ''} (dominant priority: ${status})`,
@@ -858,9 +858,9 @@ const GANTT_LOCALES = {
     }
   },
   zh: {
-    title: '看板日视图',
-    nav: '看板日视图',
-    openCommand: '看板日视图：打开今天起的任务时间线',
+    title: '看板实时甘特图',
+    nav: '看板实时甘特图',
+    openCommand: '看板实时甘特图：打开以现在为中心的任务时间线',
     refresh: '刷新',
     backend: '后端：',
     allBoards: '全部看板',
@@ -882,7 +882,7 @@ const GANTT_LOCALES = {
     emptyBoard: '无数据',
     emptyBoardDesc: board => `看板 ${board} 没有未完成任务。`,
     cannotLoadBoard: '无法加载看板',
-    cannotLoadBoardDesc: base => `后端 kanban-day-gantt 不可达${base ? `（${base}）` : ''} — 插件已启用？应用后端已重启？`,
+    cannotLoadBoardDesc: base => `后端 kanban-live-gantt 不可达${base ? `（${base}）` : ''} — 插件已启用？应用后端已重启？`,
     taskUnreadable: '任务信息不可读',
     taskUnreadableDesc: '后端没有响应。',
     nTasksTotal: (n, status) => `${n} 个未完成任务（主状态：${status}）`,
@@ -1253,7 +1253,7 @@ function TaskDrawer({ taskId, board, onClose, assignees = [], docked = false, on
   const prevTaskIdRef = useRef(null)
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['kanban-day-gantt', 'task', apiBase(), board, taskId],
+    queryKey: ['kanban-live-gantt', 'task', apiBase(), board, taskId],
     queryFn: () => fetchTask(taskId, board),
     enabled: Boolean(taskId)
   })
@@ -1281,7 +1281,7 @@ function TaskDrawer({ taskId, board, onClose, assignees = [], docked = false, on
     onSuccess: () => {
       setActionError(null)
       void refetch()
-      void queryClient.invalidateQueries({ queryKey: ['kanban-day-gantt', 'gantt'] })
+      void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] })
     },
     onError: error => setActionError(String(error?.message || error))
   })
@@ -1299,7 +1299,7 @@ function TaskDrawer({ taskId, board, onClose, assignees = [], docked = false, on
     onSuccess: () => {
       setActionError(null)
       void refetch()
-      void queryClient.invalidateQueries({ queryKey: ['kanban-day-gantt', 'gantt'] })
+      void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] })
     },
     onError: error => setActionError(String(error?.message || error))
   })
@@ -1646,7 +1646,7 @@ function TitlebarBoardSwitcher() {
   const i18n = useGanttI18n()
   const queryClient = useQueryClient()
   const { data } = useQuery({
-    queryKey: ['kanban-day-gantt', 'boards', apiBase()],
+    queryKey: ['kanban-live-gantt', 'boards', apiBase()],
     queryFn: () => apiFetch('/boards'),
     refetchInterval: 5 * 60_000
   })
@@ -1658,7 +1658,7 @@ function TitlebarBoardSwitcher() {
   const setBoard = slug => {
     $boardSlug.set(slug)
     if (storage) storage.set('board', slug)
-    void queryClient.invalidateQueries({ queryKey: ['kanban-day-gantt', 'gantt'] })
+    void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] })
   }
 
   return jsxs(DropdownMenu, {
@@ -1726,12 +1726,12 @@ export function KanbanGanttPage() {
   const drawerDocked = useValue($drawerDocked)
 
   const { data: boardsData } = useQuery({
-    queryKey: ['kanban-day-gantt', 'boards', apiBase()],
+    queryKey: ['kanban-live-gantt', 'boards', apiBase()],
     queryFn: () => apiFetch('/boards'),
     refetchInterval: 5 * 60_000
   })
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['kanban-day-gantt', 'gantt', apiBase(), board],
+    queryKey: ['kanban-live-gantt', 'gantt', apiBase(), board],
     queryFn: () => apiFetch(`/gantt${board ? `?board=${encodeURIComponent(board)}` : ''}`),
     refetchInterval: 60_000
   })
@@ -1849,7 +1849,7 @@ export function KanbanGanttPage() {
     onSuccess: () => {
       setSelectedIds(new Set())
       setBulkAssignee('')
-      void queryClient.invalidateQueries({ queryKey: ['kanban-day-gantt'] })
+      void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt'] })
     }
   })
 
@@ -1865,7 +1865,7 @@ export function KanbanGanttPage() {
     $boardSlug.set(slug)
     if (storage) storage.set('board', slug)
     setSearch('')
-    void queryClient.invalidateQueries({ queryKey: ['kanban-day-gantt', 'gantt'] })
+    void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] })
   }
 
   // Pick the fallback board once the list arrives and none is selected yet.
@@ -2125,7 +2125,7 @@ export function KanbanGanttPage() {
                     children: `×${effZoom >= 10 ? Math.round(effZoom) : effZoom.toFixed(1)}`
                   })
                 : null,
-              jsx(Button, { size: 'xs', onClick: () => void queryClient.invalidateQueries({ queryKey: ['kanban-day-gantt', 'gantt'] }), children: i18n.refresh })
+              jsx(Button, { size: 'xs', onClick: () => void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] }), children: i18n.refresh })
             ]
           })
         ]
@@ -2243,8 +2243,8 @@ export function KanbanGanttPage() {
 
 const plugin = {
   id: ID,
-  name: 'Kanban Day Gantt',
-  description: 'Day view of a Hermes kanban board — rolling 48 h window (now − 24h → now + 24h), open work by default (done optional), free wheel zoom. Local fork of kanban-gantt.',
+  name: 'Kanban Live Gantt',
+  description: 'Live Gantt of a Hermes kanban board — a now-centered, slidable 72 h window (default now − 24h → now + 48h), open work by default (done optional), free wheel zoom. Local fork of kanban-gantt.',
   register(ctx) {
     rest = ctx.rest
     storage = ctx.storage
@@ -2288,7 +2288,7 @@ const plugin = {
       {
         id: 'page',
         area: ROUTES_AREA,
-        data: { path: '/kanban-day-gantt' },
+        data: { path: '/kanban-live-gantt' },
         render: () => jsx(KanbanGanttPage, {})
       }
     ])
@@ -2301,16 +2301,16 @@ const plugin = {
         id: 'nav',
         area: SIDEBAR_NAV_AREA,
         order: 70,
-        data: { codicon: 'calendar', label: tr('nav', 'Kanban Day'), path: '/kanban-day-gantt' }
+        data: { codicon: 'calendar', label: tr('nav', 'Kanban Live'), path: '/kanban-live-gantt' }
       },
       {
         id: 'open',
         area: PALETTE_AREA,
         data: {
-          id: 'kanbanDayGantt.open',
-          label: tr('openCommand', 'Kanban Day Gantt: open day view'),
+          id: 'kanbanLiveGantt.open',
+          label: tr('openCommand', 'Kanban Live Gantt: open the now-centered timeline'),
           keywords: ['kanban', 'gantt', 'day', 'today', 'timeline', '日视图'],
-          run: () => host.navigate('/kanban-day-gantt')
+          run: () => host.navigate('/kanban-live-gantt')
         }
       }
     ])
