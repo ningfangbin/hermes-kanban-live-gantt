@@ -3,6 +3,6 @@
   "label": "Kanban Live Gantt",
   "description": "Live Gantt of a kanban board: a now-centered, slidable 72 h timeline (default now -24 h -> now +48 h), hour zoom, optional done lane (backend for the kanban-live-gantt desktop plugin; fork of kanban-gantt, GPL-3.0).",
   "icon": "Timeline",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "api": "plugin_api.py"
 }
