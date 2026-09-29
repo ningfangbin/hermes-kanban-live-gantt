@@ -2072,31 +2072,40 @@ var plugin = {
 `;
       document.head.appendChild(style);
     }
-    const openCommandLabel = ctx.i18n && typeof ctx.i18n.t === "function" ? ctx.i18n.t("openCommand") : "Kanban Day Gantt: open day view";
+    const tr = (key, fallback) => ctx.i18n && typeof ctx.i18n.t === "function" ? ctx.i18n.t(key) : fallback;
     ctx.registerMany([
       {
         id: "page",
         area: ROUTES_AREA,
         data: { path: "/kanban-day-gantt" },
         render: () => jsx(KanbanGanttPage, {})
-      },
+      }
+    ]);
+    const registerLabels = () => ctx.registerMany([
       {
         id: "nav",
         area: SIDEBAR_NAV_AREA,
         order: 70,
-        data: { codicon: "calendar", label: "Kanban Day", path: "/kanban-day-gantt" }
+        data: { codicon: "calendar", label: tr("nav", "Kanban Day"), path: "/kanban-day-gantt" }
       },
       {
         id: "open",
         area: PALETTE_AREA,
         data: {
           id: "kanbanDayGantt.open",
-          label: openCommandLabel,
+          label: tr("openCommand", "Kanban Day Gantt: open day view"),
           keywords: ["kanban", "gantt", "day", "today", "timeline", "日视图"],
           run: () => host.navigate("/kanban-day-gantt")
         }
       }
     ]);
+    let disposeLabels = registerLabels();
+    if (ctx.i18n && typeof ctx.i18n.onLocaleChange === "function") {
+      ctx.i18n.onLocaleChange(() => {
+        disposeLabels();
+        disposeLabels = registerLabels();
+      });
+    }
   }
 };
 var main_default = plugin;

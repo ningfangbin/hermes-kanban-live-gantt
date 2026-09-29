@@ -16,7 +16,7 @@ see [Credits & license](#credits--license).
 | Day cells | UTC-based ticks | local-midnight cells; today highlighted ("今天 / Today") |
 | Now marker | none | thin accent **now line** with time label |
 | Bars | full extents | clipped to the window; bars fully outside are not drawn (row shows "—") |
-| i18n | en + fr | **en + zh** (full coverage) + straggler French removed |
+| i18n | en + fr | **en + zh** (full coverage, 76 keys aligned; sidebar/palette labels follow the app language) + straggler French removed |
 
 Everything else (board switcher, filters, search, bulk actions, task drawer,
 write endpoints, resizable columns, header chrome) is unchanged.
