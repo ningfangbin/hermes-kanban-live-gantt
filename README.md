@@ -11,8 +11,8 @@ see [Credits & license](#credits--license).
 | | kanban-gantt | kanban-day-gantt (this) |
 |---|---|---|
 | Statuses shown | all (incl. done / archived) | **open work by default; done optional** ("Done" entry in the status filter, default off; archived never) |
-| Timeline domain | data-driven, **loops over ≥7 days (1 week)** | **rolling 48 h: now − 24 h → now + 24 h** (local wall clock) |
-| Window length | zoom slider (20 %–180 %) | none — the rolling window is fixed by design; **wheel = free zoom** (×1 fit → 240 px/h, double-click resets) |
+| Timeline domain | data-driven, **loops over ≥7 days (1 week)** | **slidable 72 h: default now − 24 h → now + 48 h** (local wall clock) — drag the ruler to move it, drag its ends to move start/end |
+| Window length | zoom slider (20 %–180 %) | user-controlled — **wheel = free zoom** (×1 fit → 240 px/h); the window slides/resizes freely (min 2 h), reset restores the default |
 | Day cells | UTC-based ticks | local-midnight cells; today highlighted ("今天 / Today") |
 | Now marker | none | thin accent **now line** with time label |
 | Bars | full extents | clipped to the window; bars fully outside are not drawn (row shows "—") |
@@ -57,11 +57,23 @@ The plugin is a two-half package, like `kanban-gantt`:
 
 ## Window semantics
 
-The timeline is a **rolling 48 h window — `[now − 24 h, now + 24 h]`** anchored
-on the current moment (local wall clock). No day-count switch: it re-anchors on
-every data refresh, the "now" line marks the current moment and today's
-calendar cell stays highlighted. Tasks appear only when they have activity in
-that window; an open task created days ago still gets a row, but no bar ("—").
+The timeline opens on a **72 h window — `[now − 24 h, now + 48 h]`** (local wall
+clock), re-anchored to the current moment on every refresh **until you move
+it**. The window is not fixed:
+
+- **Drag the ruler** — slide the whole window in time (both edges together,
+  1 px = 1 px at the current zoom; drag right to look further back).
+- **Drag the ruler's end handles** (the thin bars at either end, `col-resize`
+  cursor) — move just the window **start** or **end**; it never shrinks below
+  2 h.
+- **Double-click the ruler** (or the `↺ window` / `×N` toolbar chips) — reset
+  to the default window and zoom.
+
+A manually placed window stays exactly there (refreshes and board switches do
+not move it; it is not persisted — a reload returns to the default). The "now"
+line only shows while now is inside the window; today's calendar cell stays
+highlighted. Tasks appear only when they have activity in the window; an open
+task created days ago still gets a row, but no bar ("—").
 
 **Done is optional:** a **Done** entry sits in the status filter (same place as
 every other status toggle — also clickable in the footer legend), default
@@ -77,7 +89,8 @@ shows.
   spacing never drops below ~56 px; gridlines run down the body.
 - **Shift + wheel** — pan horizontally. The name column keeps native
   scrolling; the horizontal scrollbar still works.
-- **Double-click the ruler** (or the `×N` chip in the toolbar) — reset to fit.
+- **Double-click the ruler** (or the `×N` chip in the toolbar) — reset the view
+  (default window + fit).
 - The zoom level persists via `ctx.storage` (key `zoom`).
 
 ## Credits & license

@@ -119,9 +119,20 @@ function dayStartsBetween(min, max) {
   return out;
 }
 var WINDOW_BACK = 24 * 3600;
-var WINDOW_AHEAD = 24 * 3600;
+var WINDOW_AHEAD = 48 * 3600;
+var MIN_WINDOW = 2 * 3600;
 function computeRollingDomain(nowSec) {
   return { min: nowSec - WINDOW_BACK, max: nowSec + WINDOW_AHEAD };
+}
+function slideWindow(win, deltaSec) {
+  return { min: win.min + deltaSec, max: win.max + deltaSec };
+}
+function slideWindowByPixels(win, dxPx, pxPerSec) {
+  return slideWindow(win, -dxPx / pxPerSec);
+}
+function resizeWindow(win, edge, tSec) {
+  if (edge === "start") return { min: Math.min(tSec, win.max - MIN_WINDOW), max: win.max };
+  return { min: win.min, max: Math.max(tSec, win.min + MIN_WINDOW) };
 }
 function daySegments(min, max) {
   const out = [];
@@ -172,6 +183,7 @@ function hourTickPlan(min, max, pxPerSec) {
 export {
   DAY,
   MIN_BAR,
+  MIN_WINDOW,
   WINDOW_AHEAD,
   WINDOW_BACK,
   barInWindow,
@@ -184,7 +196,10 @@ export {
   isActive,
   localDayStart,
   matchesSearch,
+  resizeWindow,
   shortId,
+  slideWindow,
+  slideWindowByPixels,
   statusTone,
   taskBars,
   taskVisible

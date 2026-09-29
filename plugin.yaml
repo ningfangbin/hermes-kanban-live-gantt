@@ -1,6 +1,6 @@
 name: kanban-day-gantt
 version: "0.1.0"
-description: "Day view for the Hermes kanban boards — open work on a rolling 48 h timeline (now -24 h -> now +24 h) with hour-granularity wheel zoom, a now-line, status filtering and an optional done lane. Fork of kanban-gantt (GPL-3.0)."
+description: "Day view for the Hermes kanban boards — open work on a slidable 72 h timeline (default now -24 h -> now +48 h; drag to move, drag the ends to resize) with hour-granularity wheel zoom, a now-line, status filtering and an optional done lane. Fork of kanban-gantt (GPL-3.0)."
 author: ningfangbin (fork of kanban-gantt by e-is)
 kind: standalone
 requires_hermes: ">=0.19"

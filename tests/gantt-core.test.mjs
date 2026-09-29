@@ -10,7 +10,8 @@ import assert from 'node:assert/strict'
 import {
   DAY, MIN_BAR, statusTone,
   barRange, taskBars, shortId, matchesSearch, buildRows,
-  isActive, localDayStart, dayStartsBetween, computeRollingDomain, daySegments, taskVisible, barInWindow, hourTickPlan } from '../desktop/gantt-core.js'
+  isActive, localDayStart, dayStartsBetween, computeRollingDomain, daySegments, taskVisible, barInWindow, hourTickPlan,
+  slideWindow, slideWindowByPixels, resizeWindow, MIN_WINDOW, WINDOW_BACK, WINDOW_AHEAD } from '../desktop/gantt-core.js'
 
 const NOW = 1_800_000_000 // fixed clock for the pure logic tests
 
@@ -34,11 +35,27 @@ test('localDayStart — local midnight of the day containing the timestamp', () 
   assert.ok(mid <= NOW && NOW - mid < DAY)
 })
 
-test('computeRollingDomain — now − 24 h → now + 24 h (no day-count window)', () => {
+test('computeRollingDomain — default window: now − 24 h → now + 48 h (72 h)', () => {
   const d = computeRollingDomain(NOW)
-  assert.equal(d.min, NOW - 24 * 3600)
-  assert.equal(d.max, NOW + 24 * 3600)
-  assert.equal(d.max - d.min, 48 * 3600)
+  assert.equal(d.min, NOW - WINDOW_BACK)
+  assert.equal(d.max, NOW + WINDOW_AHEAD)
+  assert.equal(d.max - d.min, 72 * 3600)
+})
+
+test('window helpers — slide, pixel-slide, one-edge resize (MIN_WINDOW floor)', () => {
+  const w = { min: NOW - 24 * 3600, max: NOW + 48 * 3600 }
+  assert.deepEqual(slideWindow(w, 3600), { min: w.min + 3600, max: w.max + 3600 })
+  // dragging the ruler right pulls the window back in time (content follows the pointer)
+  assert.deepEqual(slideWindowByPixels(w, 100, 0.01), { min: w.min - 10_000, max: w.max - 10_000 })
+  // one edge at a time
+  assert.deepEqual(resizeWindow(w, 'start', NOW), { min: NOW, max: w.max })
+  assert.deepEqual(resizeWindow(w, 'end', NOW + 20 * 3600), { min: w.min, max: NOW + 20 * 3600 })
+  // never below MIN_WINDOW (2 h)
+  assert.equal(resizeWindow(w, 'start', w.max + 3600).min, w.max - MIN_WINDOW)
+  assert.equal(resizeWindow(w, 'end', w.min - 3600).max, w.min + MIN_WINDOW)
+  assert.equal(MIN_WINDOW, 2 * 3600)
+  assert.equal(WINDOW_BACK, 24 * 3600)
+  assert.equal(WINDOW_AHEAD, 48 * 3600)
 })
 
 test('daySegments — rolling window splits into local days (partial ends kept)', () => {
@@ -53,10 +70,10 @@ test('daySegments — rolling window splits into local days (partial ends kept)'
   assert.equal(segs[1].end, segs[0].end + DAY)
   assert.equal(segs[2].end, max)
   assert.equal(segs[0].dayStart, localDayStart(min))
-  // the rolling window itself yields 2–3 segments covering it exactly
+  // the default 72 h window yields 3–4 segments covering it exactly
   const roll = computeRollingDomain(NOW)
   const rs = daySegments(roll.min, roll.max)
-  assert.ok(rs.length === 2 || rs.length === 3, `segments: ${rs.length}`)
+  assert.ok(rs.length === 3 || rs.length === 4, `segments: ${rs.length}`)
   assert.equal(rs[0].start, roll.min)
   assert.equal(rs[rs.length - 1].end, roll.max)
   for (let i = 1; i < rs.length; i++) assert.equal(rs[i].start, rs[i - 1].end)
@@ -167,18 +184,18 @@ test('MIN_BAR sanity', () => {
 })
 
 test('hourTickPlan — hour scale as you zoom; 15-min minors at the deep end', () => {
-  const { min, max } = computeRollingDomain(NOW) // 48 h window
-  const fit = hourTickPlan(min, max, 1000 / (48 * 3600)) // ≈20.8 px/h
+  const { min, max } = computeRollingDomain(NOW) // 72 h default window
+  const fit = hourTickPlan(min, max, 1000 / (72 * 3600)) // ≈13.9 px/h
   assert.equal(fit.major.length, 0)
   assert.equal(fit.minor.length, 0)
 
-  const z4 = hourTickPlan(min, max, (1000 * 4) / (48 * 3600)) // ≈83.3 px/h
-  assert.equal(z4.major.length, 48) // every hour of the two days
-  const gapPx = (z4.major[1] - z4.major[0]) * (1000 * 4) / (48 * 3600)
+  const z4 = hourTickPlan(min, max, (1000 * 4) / (72 * 3600)) // ≈55.6 px/h
+  assert.ok(z4.major.length >= 35 && z4.major.length <= 37, `majors: ${z4.major.length}`) // every 2 h
+  const gapPx = (z4.major[1] - z4.major[0]) * (1000 * 4) / (72 * 3600)
   assert.ok(gapPx >= 56, `major spacing < 56 px (${gapPx})`)
 
   const deep = hourTickPlan(min, max, 240 / 3600) // 240 px/h
-  assert.equal(deep.major.length, 48)
+  assert.ok(deep.major.length >= 71 && deep.major.length <= 72, `deep majors: ${deep.major.length}`) // every full hour
   assert.ok(deep.minor.length > 100) // :15/:30/:45
   for (const ts of deep.minor) assert.equal(new Date(ts * 1000).getMinutes() % 15, 0)
 })

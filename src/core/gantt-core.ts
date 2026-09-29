@@ -3,9 +3,12 @@
  * 2026-09-29 by ningfangbin, same license). No React, no SDK: this module is
  * unit-testable as-is.
  *
- * Day view = a rolling 48 h window, now − 24h → now + 24h (local wall clock,
- * never a fixed day-count window). Open work always shows; done tasks only
- * when explicitly enabled AND they have activity inside the window. */
+ * Day view = a default 72 h window, now − 24h → now + 48h (local wall clock,
+ * never a fixed day-count window). The window itself is slidable: the helpers
+ * below move it as a whole (slideWindow) or one edge at a time (resizeWindow);
+ * the UI re-anchors it to "now" on refresh until the user moves it. Open work
+ * always shows; done tasks only when explicitly enabled AND they have activity
+ * inside the window. */
 
 export const DAY = 86_400;
 export const MIN_BAR = 2 * 3600;
@@ -152,13 +155,32 @@ export function dayStartsBetween(min, max) {
   return out;
 }
 
-export const WINDOW_BACK = 24 * 3600;   // rolling window: now − 24 h …
-export const WINDOW_AHEAD = 24 * 3600;  // … → now + 24 h (48 h total)
+export const WINDOW_BACK = 24 * 3600;   // default window: now − 24 h …
+export const WINDOW_AHEAD = 48 * 3600;  // … → now + 48 h (72 h total)
+export const MIN_WINDOW = 2 * 3600;     // edge drags never shrink below 2 h
 
-/** The rolling day-view window — anchored on the current moment, not on a
- *  fixed day count. */
+/** The default day-view window — anchored on the current moment, not on a
+ *  fixed day count; the UI re-anchors it on refresh until the user slides it. */
 export function computeRollingDomain(nowSec) {
   return { min: nowSec - WINDOW_BACK, max: nowSec + WINDOW_AHEAD };
+}
+
+/** Slide the whole window in time (both edges move together). */
+export function slideWindow(win, deltaSec) {
+  return { min: win.min + deltaSec, max: win.max + deltaSec };
+}
+
+/** Window slide from a ruler drag: dragging right pulls the window back in
+ *  time, so the timeline follows the pointer one pixel per pixel. */
+export function slideWindowByPixels(win, dxPx, pxPerSec) {
+  return slideWindow(win, -dxPx / pxPerSec);
+}
+
+/** Move ONE edge of the window to `tSec` (clamped so the span stays ≥
+ *  MIN_WINDOW). `edge` is 'start' or 'end'. */
+export function resizeWindow(win, edge, tSec) {
+  if (edge === 'start') return { min: Math.min(tSec, win.max - MIN_WINDOW), max: win.max };
+  return { min: win.min, max: Math.max(tSec, win.min + MIN_WINDOW) };
 }
 
 /** [min, max) split into local-calendar-day segments — the rolling window

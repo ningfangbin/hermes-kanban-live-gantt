@@ -150,9 +150,20 @@ function localDayStart(sec) {
   return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 1e3);
 }
 var WINDOW_BACK = 24 * 3600;
-var WINDOW_AHEAD = 24 * 3600;
+var WINDOW_AHEAD = 48 * 3600;
+var MIN_WINDOW = 2 * 3600;
 function computeRollingDomain(nowSec) {
   return { min: nowSec - WINDOW_BACK, max: nowSec + WINDOW_AHEAD };
+}
+function slideWindow(win, deltaSec) {
+  return { min: win.min + deltaSec, max: win.max + deltaSec };
+}
+function slideWindowByPixels(win, dxPx, pxPerSec) {
+  return slideWindow(win, -dxPx / pxPerSec);
+}
+function resizeWindow(win, edge, tSec) {
+  if (edge === "start") return { min: Math.min(tSec, win.max - MIN_WINDOW), max: win.max };
+  return { min: win.min, max: Math.max(tSec, win.min + MIN_WINDOW) };
 }
 function daySegments(min, max) {
   const out = [];
@@ -252,8 +263,52 @@ function NowLine({ min, max, pxPerSec, now, label }) {
     ]
   });
 }
-function Ruler({ min, max, pxPerSec, now, onResetZoom }) {
+function Ruler({ min, max, pxPerSec, now, onResetView, onWindow }) {
   const i18n = useGanttI18n();
+  const rootRef = useRef(null);
+  const dragRef = useRef(null);
+  const [dragging, setDragging] = useState(false);
+  const suppressResetRef = useRef(false);
+  const beginDrag = (mode) => (event) => {
+    if (event.button !== 0 || !rootRef.current) return;
+    event.stopPropagation();
+    dragRef.current = {
+      mode,
+      x0: event.clientX,
+      left0: rootRef.current.getBoundingClientRect().left,
+      startWin: { min, max },
+      moved: false,
+      pointerId: event.pointerId
+    };
+    setDragging(true);
+    try {
+      rootRef.current.setPointerCapture(event.pointerId);
+    } catch (err) {
+    }
+  };
+  const onPointerMove = (event) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const dx = event.clientX - d.x0;
+    if (!d.moved && Math.abs(dx) > 2) d.moved = true;
+    if (d.mode === "slide") {
+      onWindow(slideWindowByPixels(d.startWin, dx, pxPerSec));
+    } else {
+      const tSec = d.startWin.min + (event.clientX - d.left0) / pxPerSec;
+      onWindow(resizeWindow(d.startWin, d.mode, tSec));
+    }
+  };
+  const endDrag = (event) => {
+    const d = dragRef.current;
+    if (!d) return;
+    dragRef.current = null;
+    setDragging(false);
+    if (d.moved) suppressResetRef.current = true;
+    try {
+      rootRef.current && rootRef.current.releasePointerCapture(d.pointerId);
+    } catch (err) {
+    }
+  };
   const dayWidth = pxPerSec * DAY;
   const showWeekday = dayWidth >= 50;
   const todayStart = now != null ? localDayStart(now) : localDayStart(min);
@@ -304,12 +359,41 @@ function Ruler({ min, max, pxPerSec, now, onResetZoom }) {
     }, "H" + t));
   }
   const nowLabel = now != null && now >= min && now <= max ? `${i18n.now} ${new Date(now * 1e3).toLocaleTimeString(void 0, { hour: "2-digit", minute: "2-digit" })}` : null;
+  const handleAt = (side, style) => jsx("div", {
+    onPointerDown: beginDrag(side),
+    onDoubleClick: (event) => event.stopPropagation(),
+    // a handle is not a reset target
+    title: side === "start" ? i18n.dragWindowStart : i18n.dragWindowEnd,
+    className: "absolute top-0 bottom-0 z-20 w-2.5 cursor-col-resize flex justify-center group",
+    style,
+    children: jsx("div", { className: "w-1 h-full rounded-full bg-(--ui-accent)/25 group-hover:bg-(--ui-accent)/70 transition-colors" })
+  }, "handle-" + side);
   return jsxs("div", {
-    className: "relative border-b border-(--ui-stroke-secondary) select-none text-[10px]",
+    ref: rootRef,
+    className: cn(
+      "relative border-b border-(--ui-stroke-secondary) select-none text-[10px]",
+      dragging ? "cursor-grabbing" : "cursor-grab"
+    ),
     style: { height: showWeekday ? "32px" : "24px" },
     title: i18n.zoomHint,
-    onDoubleClick: onResetZoom,
-    children: [...cells, ...ticks, jsx(NowLine, { min, max, pxPerSec, now, label: nowLabel })]
+    onPointerDown: beginDrag("slide"),
+    onPointerMove,
+    onPointerUp: endDrag,
+    onPointerCancel: endDrag,
+    onDoubleClick: () => {
+      if (suppressResetRef.current) {
+        suppressResetRef.current = false;
+        return;
+      }
+      onResetView();
+    },
+    children: [
+      ...cells,
+      ...ticks,
+      jsx(NowLine, { min, max, pxPerSec, now, label: nowLabel }),
+      handleAt("start", { left: 0 }),
+      handleAt("end", { left: "100%", marginLeft: "-10px" })
+    ]
   });
 }
 function Bar({ task, bar, pxPerSec, min, max, onOpen }) {
@@ -725,8 +809,11 @@ var GANTT_LOCALES = {
     showDoneHint: "Show done tasks with activity inside the window (default: hidden)",
     today: "Today",
     now: "now",
-    zoomReset: "Reset zoom — fit the whole window",
-    zoomHint: "Wheel: zoom in/out · Shift+Wheel: pan · Double-click: reset zoom",
+    zoomReset: "Reset view — default window (now −24h → +48h) and zoom",
+    zoomHint: "Wheel: zoom · Shift+Wheel: pan · Drag the ruler: slide the window · Drag its ends: move start/end · Double-click: reset",
+    resetWindow: "↺ window",
+    dragWindowStart: "Drag to move the window start",
+    dragWindowEnd: "Drag to move the window end",
     nothingToDisplay: "Nothing to display",
     noTasksMatch: "No OPEN tasks match the current search or filters (done tasks are never shown here).",
     emptyBoard: "No data",
@@ -825,8 +912,11 @@ var GANTT_LOCALES = {
     showDoneHint: "显示时间窗内有活动的已完成任务（默认隐藏）",
     today: "今天",
     now: "现在",
-    zoomReset: "重置缩放 — 回到适应窗口",
-    zoomHint: "滚轮：缩放 · Shift+滚轮：平移 · 双击：重置缩放",
+    zoomReset: "重置视图 — 恢复默认窗口（now−24h → +48h）与缩放",
+    zoomHint: "滚轮：缩放 · Shift+滚轮：平移 · 拖拽标尺：滑动窗口 · 拖拽两端：移动起点/终点 · 双击：重置",
+    resetWindow: "↺ 默认窗口",
+    dragWindowStart: "拖动：移动窗口起点",
+    dragWindowEnd: "拖动：移动窗口终点",
     nothingToDisplay: "暂无可显示内容",
     noTasksMatch: "没有未完成任务匹配当前搜索或筛选条件（已完成任务不在此视图显示）。",
     emptyBoard: "无数据",
@@ -1630,6 +1720,7 @@ function KanbanGanttPage() {
     const saved = storage ? Number(storage.get("zoom", null)) : NaN;
     return Number.isFinite(saved) && saved >= 1 ? saved : 1;
   });
+  const [win, setWin] = useState(null);
   const containerRef = useRef(null);
   const scrollerRef = useRef(null);
   const [trackW, setTrackW] = useState(0);
@@ -1654,7 +1745,7 @@ function KanbanGanttPage() {
   const derived = useMemo(() => {
     if (!data || !data.tasks) return null;
     const nowSec = Date.now() / 1e3;
-    const domain2 = computeRollingDomain(nowSec);
+    const domain2 = win ? { min: win.min, max: win.max } : computeRollingDomain(nowSec);
     let visible = data.tasks.filter((t) => taskVisible(t, showDone, nowSec, domain2.min, domain2.max));
     if (disabledStatuses.size > 0) {
       visible = visible.filter((t) => !disabledStatuses.has(t.status));
@@ -1666,7 +1757,7 @@ function KanbanGanttPage() {
     const rows2 = buildRows(visible);
     const allAssignees = Array.from(new Set(data.tasks.map((t) => t.assignee).filter(Boolean))).sort();
     return { rows: rows2, domain: domain2, total: visible.length, tasks: visible, allAssignees };
-  }, [data, disabledStatuses, selectedAssignees, search, showDone]);
+  }, [data, disabledStatuses, selectedAssignees, search, showDone, win]);
   const handleToggleCheck = (id, checked, nativeEvent) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -1759,9 +1850,13 @@ function KanbanGanttPage() {
   const maxZoom = Math.max(1, ZOOM_MAX_PX_PER_HOUR / basePxPerHour);
   const effZoom = Math.min(Math.max(zoom, 1), maxZoom);
   const pxPerSec = basePerSec * effZoom;
-  const resetZoom = () => {
+  const resetView = () => {
     setZoom(1);
+    setWin(null);
     if (storage) storage.set("zoom", 1);
+  };
+  const applyWindow = (next) => {
+    setWin({ min: Math.round(next.min), max: Math.round(next.max) });
   };
   const zoomAnchorRef = useRef(null);
   useEffect(() => {
@@ -1801,12 +1896,13 @@ function KanbanGanttPage() {
   useEffect(() => {
     const el = scrollerRef.current;
     if (!el || !derived || !derived.domain) return;
+    if (win) return;
     if (hasAutoScrolledBoardRef.current === board) return;
     hasAutoScrolledBoardRef.current = board;
     const nowSec = Date.now() / 1e3;
     const vw = Math.max(trackW - labelW - 24, 300);
     el.scrollLeft = Math.max(0, labelW + (nowSec - derived.domain.min) * pxPerSec - vw / 2);
-  }, [board, derived, trackW, pxPerSec, labelW]);
+  }, [board, derived, trackW, pxPerSec, labelW, win]);
   if (isLoading && !data) {
     return jsx("div", { className: "flex h-full items-center justify-center p-8", children: jsx(Loader, {}) });
   }
@@ -1919,13 +2015,20 @@ function KanbanGanttPage() {
               }),
               // Board switcher moved to the desktop titlebar band (titleBar.center)
               // — see TitlebarBoardSwitcher above.
-              // Right: zoom chip + Refresh
+              // Right: window chip (manual only) + zoom chip + Refresh
               jsxs("div", {
                 className: "inline-flex items-center gap-3",
                 children: [
+                  win !== null ? jsx("button", {
+                    type: "button",
+                    onClick: resetView,
+                    title: i18n.zoomReset,
+                    className: "rounded px-1.5 py-0.5 text-[10px] border border-(--ui-stroke-tertiary) text-(--ui-text-tertiary) hover:text-(--ui-text-secondary) cursor-pointer",
+                    children: i18n.resetWindow
+                  }) : null,
                   effZoom > 1.001 ? jsx("button", {
                     type: "button",
-                    onClick: resetZoom,
+                    onClick: resetView,
                     title: i18n.zoomReset,
                     className: "rounded px-1.5 py-0.5 text-[10px] tabular-nums border border-(--ui-accent)/40 bg-(--ui-accent)/10 text-(--ui-accent) cursor-pointer",
                     children: `×${effZoom >= 10 ? Math.round(effZoom) : effZoom.toFixed(1)}`
@@ -1996,7 +2099,7 @@ function KanbanGanttPage() {
                           })
                         ]
                       }),
-                      jsx(Ruler, { min: domain.min, max: domain.max, pxPerSec, now, onResetZoom: resetZoom })
+                      jsx(Ruler, { min: domain.min, max: domain.max, pxPerSec, now, onResetView: resetView, onWindow: applyWindow })
                     ]
                   }),
                   jsxs("div", {

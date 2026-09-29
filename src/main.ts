@@ -72,14 +72,15 @@ const LABEL_W = 300              // px — left task-name column (sticky)
 const ROW_H = 28                 // px — row height
 const BAR_H = 14                 // px — bar height inside a row
 const MIN_BAR_SEC = 2 * 3600     // 2h — minimum visible bar length
-// The window is a rolling 48 h one (now − 24h → now + 24h, see WINDOW_BACK /
-// WINDOW_AHEAD in gantt-core and computeRollingDomain) — no day-count switch.
+// The default window is now − 24h → now + 48h (WINDOW_BACK / WINDOW_AHEAD in
+// gantt-core, computeRollingDomain) — no day-count switch, and the window is
+// user-movable: drag the ruler to slide it, drag its ends to move start/end.
 // Max zoom-in: one hour occupies at most this many pixels (~hour + 15-min
 // granularity); ×1 = the whole day window fits the pane width.
 const ZOOM_MAX_PX_PER_HOUR = 240
 
 /* ────────────────────── gantt-core (pure logic, Node-tested) ─────────────── */
-import { taskBars, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY } from './core/gantt-core.ts'
+import { taskBars, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY, slideWindowByPixels, resizeWindow } from './core/gantt-core.ts'
 
 /* ──────────────────────────────── data doors ──────────────────────────────── */
 
@@ -159,12 +160,56 @@ function NowLine({ min, max, pxPerSec, now, label }) {
 }
 
 /** Ruler: one CELL PER LOCAL DAY over [min, max) — day boundaries are local
- * midnights; in the rolling window the first/last cells are partial. Today's
- * cell is highlighted and a now line marks the current moment. Zoomed in past
- * day scale, labelled hour ticks subdivide each day (hourTickPlan);
- * double-click resets the zoom to "fit the window". */
-function Ruler({ min, max, pxPerSec, now, onResetZoom }) {
+ * midnights; the first/last cells are partial. Today's cell is highlighted and
+ * a now line marks the current moment. Zoomed in past day scale, labelled hour
+ * ticks subdivide each day (hourTickPlan). The ruler is also the window handle:
+ * drag the body to slide the whole window, drag the end handles to move the
+ * start or the end; double-click resets to the default window + zoom. */
+function Ruler({ min, max, pxPerSec, now, onResetView, onWindow }) {
   const i18n = useGanttI18n()
+  // Window dragging: the ruler body slides the whole window; the end handles
+  // move one edge. Deltas are absolute from the drag start (re-renders mid
+  // drag cannot accumulate drift); pointer capture keeps the drag alive off-body.
+  const rootRef = useRef(null)
+  const dragRef = useRef(null)
+  const [dragging, setDragging] = useState(false)
+  const suppressResetRef = useRef(false)
+  const beginDrag = mode => event => {
+    if (event.button !== 0 || !rootRef.current) return
+    event.stopPropagation()
+    dragRef.current = {
+      mode,
+      x0: event.clientX,
+      left0: rootRef.current.getBoundingClientRect().left,
+      startWin: { min, max },
+      moved: false,
+      pointerId: event.pointerId
+    }
+    setDragging(true)
+    try { rootRef.current.setPointerCapture(event.pointerId) } catch (err) {}
+  }
+  const onPointerMove = event => {
+    const d = dragRef.current
+    if (!d) return
+    const dx = event.clientX - d.x0
+    if (!d.moved && Math.abs(dx) > 2) d.moved = true
+    if (d.mode === 'slide') {
+      // Both edges slide — the timeline follows the pointer 1:1.
+      onWindow(slideWindowByPixels(d.startWin, dx, pxPerSec))
+    } else {
+      // One edge moves to the time under the pointer (span ≥ MIN_WINDOW).
+      const tSec = d.startWin.min + (event.clientX - d.left0) / pxPerSec
+      onWindow(resizeWindow(d.startWin, d.mode, tSec))
+    }
+  }
+  const endDrag = event => {
+    const d = dragRef.current
+    if (!d) return
+    dragRef.current = null
+    setDragging(false)
+    if (d.moved) suppressResetRef.current = true // a drag is not a double-click
+    try { rootRef.current && rootRef.current.releasePointerCapture(d.pointerId) } catch (err) {}
+  }
   const dayWidth = pxPerSec * DAY
   const showWeekday = dayWidth >= 50
   const todayStart = now != null ? localDayStart(now) : localDayStart(min)
@@ -220,12 +265,36 @@ function Ruler({ min, max, pxPerSec, now, onResetZoom }) {
   const nowLabel = now != null && now >= min && now <= max
     ? `${i18n.now} ${new Date(now * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
     : null
+  const handleAt = (side, style) => jsx('div', {
+    onPointerDown: beginDrag(side),
+    onDoubleClick: event => event.stopPropagation(), // a handle is not a reset target
+    title: side === 'start' ? i18n.dragWindowStart : i18n.dragWindowEnd,
+    className: 'absolute top-0 bottom-0 z-20 w-2.5 cursor-col-resize flex justify-center group',
+    style,
+    children: jsx('div', { className: 'w-1 h-full rounded-full bg-(--ui-accent)/25 group-hover:bg-(--ui-accent)/70 transition-colors' })
+  }, 'handle-' + side)
   return jsxs('div', {
-    className: 'relative border-b border-(--ui-stroke-secondary) select-none text-[10px]',
+    ref: rootRef,
+    className: cn(
+      'relative border-b border-(--ui-stroke-secondary) select-none text-[10px]',
+      dragging ? 'cursor-grabbing' : 'cursor-grab'
+    ),
     style: { height: showWeekday ? '32px' : '24px' },
     title: i18n.zoomHint,
-    onDoubleClick: onResetZoom,
-    children: [...cells, ...ticks, jsx(NowLine, { min, max, pxPerSec, now, label: nowLabel })]
+    onPointerDown: beginDrag('slide'),
+    onPointerMove,
+    onPointerUp: endDrag,
+    onPointerCancel: endDrag,
+    onDoubleClick: () => {
+      if (suppressResetRef.current) { suppressResetRef.current = false; return }
+      onResetView()
+    },
+    children: [
+      ...cells, ...ticks,
+      jsx(NowLine, { min, max, pxPerSec, now, label: nowLabel }),
+      handleAt('start', { left: 0 }),
+      handleAt('end', { left: '100%', marginLeft: '-10px' })
+    ]
   })
 }
 
@@ -700,8 +769,11 @@ const GANTT_LOCALES = {
     showDoneHint: 'Show done tasks with activity inside the window (default: hidden)',
     today: 'Today',
     now: 'now',
-    zoomReset: 'Reset zoom — fit the whole window',
-    zoomHint: 'Wheel: zoom in/out · Shift+Wheel: pan · Double-click: reset zoom',
+    zoomReset: 'Reset view — default window (now −24h → +48h) and zoom',
+    zoomHint: 'Wheel: zoom · Shift+Wheel: pan · Drag the ruler: slide the window · Drag its ends: move start/end · Double-click: reset',
+    resetWindow: '↺ window',
+    dragWindowStart: 'Drag to move the window start',
+    dragWindowEnd: 'Drag to move the window end',
     nothingToDisplay: 'Nothing to display',
     noTasksMatch: 'No OPEN tasks match the current search or filters (done tasks are never shown here).',
     emptyBoard: 'No data',
@@ -800,8 +872,11 @@ const GANTT_LOCALES = {
     showDoneHint: '显示时间窗内有活动的已完成任务（默认隐藏）',
     today: '今天',
     now: '现在',
-    zoomReset: '重置缩放 — 回到适应窗口',
-    zoomHint: '滚轮：缩放 · Shift+滚轮：平移 · 双击：重置缩放',
+    zoomReset: '重置视图 — 恢复默认窗口（now−24h → +48h）与缩放',
+    zoomHint: '滚轮：缩放 · Shift+滚轮：平移 · 拖拽标尺：滑动窗口 · 拖拽两端：移动起点/终点 · 双击：重置',
+    resetWindow: '↺ 默认窗口',
+    dragWindowStart: '拖动：移动窗口起点',
+    dragWindowEnd: '拖动：移动窗口终点',
     nothingToDisplay: '暂无可显示内容',
     noTasksMatch: '没有未完成任务匹配当前搜索或筛选条件（已完成任务不在此视图显示）。',
     emptyBoard: '无数据',
@@ -1678,6 +1753,11 @@ export function KanbanGanttPage() {
     const saved = storage ? Number(storage.get('zoom', null)) : NaN
     return Number.isFinite(saved) && saved >= 1 ? saved : 1
   })
+  // The time window: null = default rolling window (now −24h → now +48h,
+  // re-anchored on every refresh); an object = user-slid/resized window kept
+  // exactly as placed until "reset view". Not persisted — a reload returns to
+  // the default.
+  const [win, setWin] = useState(null)
   const containerRef = useRef(null)
   const scrollerRef = useRef(null)
   const [trackW, setTrackW] = useState(0)
@@ -1707,7 +1787,7 @@ export function KanbanGanttPage() {
     // Rolling window anchored on "now"; open work always, `done` tasks only
     // with the show-done toggle on AND window activity (archived never).
     const nowSec = Date.now() / 1000
-    const domain = computeRollingDomain(nowSec)
+    const domain = win ? { min: win.min, max: win.max } : computeRollingDomain(nowSec)
     let visible = data.tasks.filter(t => taskVisible(t, showDone, nowSec, domain.min, domain.max))
     if (disabledStatuses.size > 0) {
       visible = visible.filter(t => !disabledStatuses.has(t.status))
@@ -1719,7 +1799,7 @@ export function KanbanGanttPage() {
     const rows = buildRows(visible)
     const allAssignees = Array.from(new Set(data.tasks.map(t => t.assignee).filter(Boolean))).sort()
     return { rows, domain, total: visible.length, tasks: visible, allAssignees }
-  }, [data, disabledStatuses, selectedAssignees, search, showDone])
+  }, [data, disabledStatuses, selectedAssignees, search, showDone, win])
 
   const handleToggleCheck = (id, checked, nativeEvent) => {
     setSelectedIds(prev => {
@@ -1825,20 +1905,26 @@ export function KanbanGanttPage() {
     return boards.find(b => b.slug === slug)?.label || slug || '—'
   }
 
-  // — free zoom (hour granularity) —
-  // The day window scales from "fit the width" (×1) up to hour scale
-  // (ZOOM_MAX_PX_PER_HOUR px per hour). Wheel over the timeline = zoom
-  // anchored at the cursor; shift+wheel = horizontal pan; the name column
-  // keeps native scrolling; double-click (or ×-chip) resets to fit.
+  // — free zoom (hour granularity) + slidable window —
+  // ×1 = the default window (72 h) fits the pane width; zoom goes up to hour
+  // scale (ZOOM_MAX_PX_PER_HOUR px per hour). Wheel = zoom anchored at the
+  // cursor; shift+wheel = horizontal pan; the name column keeps native
+  // scrolling. The window itself is moved from the ruler: drag it to slide
+  // (both edges), drag its ends to move start/end; double-click (or the chips)
+  // resets to the default rolling window + fit.
   const visibleWidth = Math.max(trackW - labelW - 24, 300)
   const basePerSec = visibleWidth / (WINDOW_BACK + WINDOW_AHEAD)
   const basePxPerHour = basePerSec * 3600
   const maxZoom = Math.max(1, ZOOM_MAX_PX_PER_HOUR / basePxPerHour)
   const effZoom = Math.min(Math.max(zoom, 1), maxZoom)
   const pxPerSec = basePerSec * effZoom
-  const resetZoom = () => {
+  const resetView = () => {
     setZoom(1)
+    setWin(null)
     if (storage) storage.set('zoom', 1)
+  }
+  const applyWindow = next => {
+    setWin({ min: Math.round(next.min), max: Math.round(next.max) })
   }
   const zoomAnchorRef = useRef(null)
   useEffect(() => {
@@ -1884,12 +1970,13 @@ export function KanbanGanttPage() {
   useEffect(() => {
     const el = scrollerRef.current
     if (!el || !derived || !derived.domain) return
+    if (win) return // manual window — never recenter under the user
     if (hasAutoScrolledBoardRef.current === board) return
     hasAutoScrolledBoardRef.current = board
     const nowSec = Date.now() / 1000
     const vw = Math.max(trackW - labelW - 24, 300)
     el.scrollLeft = Math.max(0, labelW + (nowSec - derived.domain.min) * pxPerSec - vw / 2)
-  }, [board, derived, trackW, pxPerSec, labelW])
+  }, [board, derived, trackW, pxPerSec, labelW, win])
 
   if (isLoading && !data) {
     return jsx('div', { className: 'flex h-full items-center justify-center p-8', children: jsx(Loader, {}) })
@@ -2016,14 +2103,23 @@ export function KanbanGanttPage() {
           // Board switcher moved to the desktop titlebar band (titleBar.center)
           // — see TitlebarBoardSwitcher above.
 
-          // Right: zoom chip + Refresh
+          // Right: window chip (manual only) + zoom chip + Refresh
           jsxs('div', {
             className: 'inline-flex items-center gap-3',
             children: [
+              win !== null
+                ? jsx('button', {
+                    type: 'button',
+                    onClick: resetView,
+                    title: i18n.zoomReset,
+                    className: 'rounded px-1.5 py-0.5 text-[10px] border border-(--ui-stroke-tertiary) text-(--ui-text-tertiary) hover:text-(--ui-text-secondary) cursor-pointer',
+                    children: i18n.resetWindow
+                  })
+                : null,
               effZoom > 1.001
                 ? jsx('button', {
                     type: 'button',
-                    onClick: resetZoom,
+                    onClick: resetView,
                     title: i18n.zoomReset,
                     className: 'rounded px-1.5 py-0.5 text-[10px] tabular-nums border border-(--ui-accent)/40 bg-(--ui-accent)/10 text-(--ui-accent) cursor-pointer',
                     children: `×${effZoom >= 10 ? Math.round(effZoom) : effZoom.toFixed(1)}`
@@ -2098,7 +2194,7 @@ export function KanbanGanttPage() {
                           })
                         ]
                       }),
-                      jsx(Ruler, { min: domain.min, max: domain.max, pxPerSec, now, onResetZoom: resetZoom })
+                      jsx(Ruler, { min: domain.min, max: domain.max, pxPerSec, now, onResetView: resetView, onWindow: applyWindow })
                     ]
                   }),
                   jsxs('div', {

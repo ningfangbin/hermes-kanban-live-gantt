@@ -294,6 +294,8 @@ if (pageNode) {
   check(!flat.includes('ARCHIVED task must be hidden'), 'archived task is filtered OUT of the day view')
   const hourLabels = flat.match(/\b\d{2}:00\b/g) || []
   check(hourLabels.length >= 3, 'zoomed render shows hour tick labels (' + hourLabels.slice(0, 4).join(' ') + ')')
+  check(flat.includes('cursor-col-resize'), 'ruler renders the window end handles (drag to move start/end)')
+  check(flat.includes('dragWindowStart') && flat.includes('dragWindowEnd'), 'window handles carry their i18n tooltips')
 }
 
 // ---------------------------------------------------------------------------
