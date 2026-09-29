@@ -1,0 +1,8 @@
+{
+  "name": "kanban-day-gantt",
+  "label": "Kanban Day Gantt",
+  "description": "Day view of a kanban board: open work on a rolling 48 h timeline (now -24 h -> now +24 h), hour zoom, optional done lane (backend for the kanban-day-gantt desktop plugin; fork of kanban-gantt, GPL-3.0).",
+  "icon": "Timeline",
+  "version": "0.1.0",
+  "api": "plugin_api.py"
+}

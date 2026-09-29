@@ -1,0 +1,728 @@
+"""kanban-day-gantt — backend for the desktop DAY view of a Hermes kanban board.
+
+Forked from the kanban-gantt backend — https://github.com/e-is/hermes-kanban-gantt
+— (c) e-is, GPL-3.0; modified 2026-09-29 by ningfangbin, distributed under the
+same license. Identical routes + behaviour, serving the kanban-day-gantt desktop
+plugin: open work on a rolling 48 h timeline (now - 24h -> now + 24h); done
+tasks optionally, only with activity inside the window.
+
+Two run modes:
+
+1. **Plugin backend** (default) — mounted at `/api/plugins/kanban-day-gantt/` by
+   the desktop/dashboard plugin system.
+2. **Standalone dev backend** — `python plugin_api.py --host H --port P` starts
+   a FastAPI/uvicorn server serving `/boards` and `/gantt` at the root, so a
+   Hermes Desktop UI on another machine can point its "backend API" setting at
+   a backend that is still in development (CORS enabled by default).
+
+Reads: `/boards` (list), `/gantt?board=<slug>` (snapshot: tasks + labels + link
+graph), `/tasks/<id>?board=<slug>` (full task + comments + events + links).
+Writes go through the *domain layer* (`hermes_cli.kanban_db`) so every
+transition keeps its invariants (parent gating, run closing, event log) —
+`PATCH /tasks/<id>/status` supports done/blocked/unblock/review/reopen/archive,
+plus comment/assign endpoints. Board paths and the current-board pointer are
+resolved by the CORE kanban resolver (`hermes_cli.kanban_db`: HERMES_KANBAN_DB
+→ HERMES_KANBAN_BOARD → <root>/kanban/current → default, root from
+HERMES_KANBAN_HOME → get_default_hermes_root()) so they can never drift from
+the CLI/dispatcher — no hardcoded path; `KANBAN_GANTT_BOARDS` remains an
+extra escape hatch for the standalone dev server.
+
+Security: reads open the board sqlite read-only (mode=ro); writes open a normal
+connection and delegate to kanban_db mutators only. Board slugs are validated
+(no path traversal). As a plugin, backend import is gated by `plugins.enabled`
+like every user plugin.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+import time
+from pathlib import Path
+from typing import Any, Optional
+
+from fastapi import APIRouter, FastAPI, HTTPException, Query
+from pydantic import BaseModel
+
+router = APIRouter()
+
+_TASK_COLUMNS = ("id", "title", "body", "status", "assignee", "priority",
+                 "created_at", "started_at", "completed_at", "result",
+                 "block_kind", "current_run_id", "workflow_template_id",
+                 "current_step_key")
+
+# Task "label" = the leading bracketed prefix of the title, e.g. `[PROJET #123]`.
+_LABEL_RE = re.compile(r"^\s*\[([^\]]+)\]\s*")
+
+VALID_STATUSES = ("triage", "todo", "scheduled", "ready", "running",
+                  "blocked", "review", "done", "archived")
+
+
+# ---------------------------------------------------------------------------
+# Board resolution — anchored on the CORE kanban resolver (hermes_cli.kanban_db)
+# so path/current-board semantics can never drift from the CLI & dispatcher.
+#
+# kanban_db resolves, highest precedence first:
+#   HERMES_KANBAN_DB (direct path) → HERMES_KANBAN_BOARD (env slug) →
+#   <root>/kanban/current file → "default"
+# and <root> = HERMES_KANBAN_HOME → get_default_hermes_root() (the profile's
+# home, or the container's /opt/data-like root — no hardcoded path).
+#
+# KANBAN_GANTT_BOARDS keeps working as an extra escape hatch for the standalone
+# dev server, and the read-only door needs a plain filesystem path, so we use
+# board_dir()/kanban_db_path() directly instead of kanban_db.connect() for
+# reads.
+# ---------------------------------------------------------------------------
+
+def _kb():
+    """Import the core kanban domain layer (available in the gateway process
+    and in tests; the bare standalone server falls back to env-only paths)."""
+    from hermes_cli import kanban_db
+    return kanban_db
+
+
+def _boards_root() -> Path:
+    explicit = os.environ.get("KANBAN_GANTT_BOARDS")
+    if explicit:
+        return Path(explicit).expanduser()
+    try:
+        return _kb().boards_root()
+    except Exception:
+        # standalone server without the hermes codebase: env-only fallback
+        home = os.environ.get("HERMES_KANBAN_HOME") or "~/.hermes"
+        return (Path(home).expanduser()) / "kanban" / "boards"
+
+
+def _board_db_path(slug: str) -> Path:
+    slug = (slug or "").strip().strip("/")
+    if not slug or slug in (".", "..") or "/" in slug or "\\" in slug:
+        raise HTTPException(status_code=400, detail="invalid board slug")
+    try:
+        # core resolver: honors HERMES_KANBAN_DB and the `default` back-compat
+        # path (<root>/kanban.db instead of boards/default/kanban.db)
+        path = _kb().kanban_db_path(slug)
+    except Exception:
+        path = _boards_root() / slug / "kanban.db"
+    if not path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail=f"board '{slug}' database not found at {path}",
+        )
+    return path
+
+
+def _resolve_board(board: Optional[str]) -> str:
+    if board and board.strip():
+        return board.strip().strip("/")
+    env = (os.environ.get("HERMES_KANBAN_BOARD") or "").strip()
+    if env:
+        return env.strip("/")
+    try:
+        return _kb().get_current_board()
+    except Exception:
+        return "default"
+
+
+def _connect(slug: str, *, ro: bool) -> sqlite3.Connection:
+    """Open a board connection. Reads use mode=ro; writes go through kanban_db."""
+    if ro:
+        path = _board_db_path(slug)
+        return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    # Import the domain layer lazily: available in the gateway process (and in
+    # tests via sys.path); a bare standalone server without the hermes codebase
+    # still serves reads.
+    from hermes_cli import kanban_db
+    return kanban_db.connect(board=slug)
+
+
+# ---------------------------------------------------------------------------
+# Serialization
+# ---------------------------------------------------------------------------
+
+def _label_of(title: str) -> Optional[str]:
+    m = _LABEL_RE.match(title or "")
+    return m.group(1).strip() if m else None
+
+
+def _task_summary(row: sqlite3.Row, board_slug: Optional[str] = None) -> dict[str, Any]:
+    title = row["title"] or ""
+    return {
+        "id": row["id"],
+        "title": title,
+        "status": row["status"],
+        "assignee": row["assignee"],
+        "priority": row["priority"],
+        "label": _label_of(title),
+        "board": board_slug,
+        "archived": row["status"] == "archived",
+        "created_at": row["created_at"],
+        "started_at": row["started_at"],
+        "completed_at": row["completed_at"],
+        "run_started_at": row["run_started_at"],
+        "run_ended_at": row["run_ended_at"],
+        "runs": [],
+    }
+
+
+def _run_windows(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Real execution windows and full run history per task, from task_runs.
+
+    Returns a dict task_id -> {
+        "run_started_at": int | None,
+        "run_ended_at": int | None,
+        "runs": list[dict]
+    }
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for row in conn.execute(
+        "SELECT id, task_id, profile, step_key, status, outcome, started_at, ended_at, error, summary "
+        "FROM task_runs "
+        "WHERE started_at IS NOT NULL "
+        "ORDER BY id ASC"
+    ):
+        tid = row[1] if isinstance(row, tuple) else row["task_id"]
+        s = row[6] if isinstance(row, tuple) else row["started_at"]
+        e = row[7] if isinstance(row, tuple) else row["ended_at"]
+        if e is not None and s >= e:
+            # ignore 0-duration synthetic runs
+            continue
+        if tid not in out:
+            out[tid] = {
+                "run_started_at": None,
+                "run_ended_at": None,
+                "runs": [],
+            }
+        run_dict = {
+            "id": row[0] if isinstance(row, tuple) else row["id"],
+            "profile": row[2] if isinstance(row, tuple) else row["profile"],
+            "step_key": row[3] if isinstance(row, tuple) else row["step_key"],
+            "status": row[4] if isinstance(row, tuple) else row["status"],
+            "outcome": row[5] if isinstance(row, tuple) else row["outcome"],
+            "started_at": s,
+            "ended_at": e,
+            "error": row[8] if isinstance(row, tuple) else row["error"],
+            "summary": row[9] if isinstance(row, tuple) else row["summary"],
+        }
+        out[tid]["runs"].append(run_dict)
+        out[tid]["run_started_at"] = s
+        out[tid]["run_ended_at"] = e
+    return out
+
+
+def _task_detail(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
+    from hermes_cli import kanban_db
+
+    task = kanban_db.get_task(conn, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+    from dataclasses import asdict
+    d = asdict(task)
+    d["label"] = _label_of(d.get("title") or "")
+    d["latest_summary"] = kanban_db.latest_summary(conn, task_id)
+    parents = [r[0] for r in conn.execute(
+        "SELECT parent_id FROM task_links WHERE child_id = ? ORDER BY parent_id",
+        (task_id,))]
+    children = [r[0] for r in conn.execute(
+        "SELECT child_id FROM task_links WHERE parent_id = ? ORDER BY child_id",
+        (task_id,))]
+    d["parents"] = parents
+    d["children"] = children
+    return d
+
+
+# ---------------------------------------------------------------------------
+# Reads
+# ---------------------------------------------------------------------------
+
+@router.get("/boards")
+def list_boards():
+    root = _boards_root()
+    boards: list[dict] = []
+    if root.is_dir():
+        for d in sorted(p for p in root.iterdir() if p.is_dir()):
+            if not (d / "kanban.db").is_file():
+                continue
+            label = d.name
+            board_file = d / "board.json"
+            if board_file.is_file():
+                try:
+                    data = json.loads(board_file.read_text(encoding="utf-8"))
+                    if isinstance(data, dict) and data.get("name"):
+                        label = str(data["name"])
+                except Exception:
+                    pass
+            boards.append({"slug": d.name, "label": label})
+    return {"boards": boards, "current": _resolve_board(None)}
+
+
+def _read_gantt(slug: str) -> dict:
+    if slug == "all" or slug == "*":
+        return _read_gantt_all()
+    conn = _connect(slug, ro=True)
+    conn.row_factory = sqlite3.Row  # _task_summary indexes by column name
+    try:
+        runs = _run_windows(conn)
+        rows = conn.execute(
+            "SELECT id, title, status, assignee, priority, created_at, started_at, completed_at, "
+            "NULL AS run_started_at, NULL AS run_ended_at "
+            "FROM tasks"
+        ).fetchall()
+
+        parents: dict[str, list[str]] = {}
+        children: dict[str, list[str]] = {}
+        for parent_id, child_id in conn.execute(
+            "SELECT parent_id, child_id FROM task_links"
+        ):
+            children.setdefault(parent_id, []).append(child_id)
+            parents.setdefault(child_id, []).append(parent_id)
+
+        tasks: list[dict] = []
+        label_counts: dict[str, int] = {}
+        for row in rows:
+            rec = _task_summary(row, board_slug=slug)
+            rec["runs"] = []
+            rec.update(runs.get(rec["id"], {}))  # real execution window & runs, if any
+            rec["children"] = children.get(rec["id"], [])
+            rec["parents"] = parents.get(rec["id"], [])
+            tasks.append(rec)
+            if rec["label"]:
+                label_counts[rec["label"]] = label_counts.get(rec["label"], 0) + 1
+
+        labels = sorted(
+            ({"label": k, "count": v} for k, v in label_counts.items()),
+            key=lambda item: (-item["count"], item["label"]),
+        )
+
+        return {
+            "board": slug,
+            "generated_at": int(time.time()),
+            "tasks": tasks,
+            "labels": labels,
+        }
+    finally:
+        conn.close()
+
+
+def _read_gantt_all() -> dict:
+    """Snapshot aggregating tasks, runs and labels from ALL discovered boards."""
+    boards_info = list_boards().get("boards", [])
+    all_tasks: list[dict] = []
+    label_counts: dict[str, int] = {}
+
+    for b in boards_info:
+        bslug = b["slug"]
+        try:
+            conn = _connect(bslug, ro=True)
+            conn.row_factory = sqlite3.Row
+        except Exception:
+            continue
+        try:
+            runs = _run_windows(conn)
+            rows = conn.execute(
+                "SELECT id, title, status, assignee, priority, created_at, started_at, completed_at, "
+                "NULL AS run_started_at, NULL AS run_ended_at "
+                "FROM tasks"
+            ).fetchall()
+
+            parents: dict[str, list[str]] = {}
+            children: dict[str, list[str]] = {}
+            for parent_id, child_id in conn.execute(
+                "SELECT parent_id, child_id FROM task_links"
+            ):
+                children.setdefault(parent_id, []).append(child_id)
+                parents.setdefault(child_id, []).append(parent_id)
+
+            for row in rows:
+                rec = _task_summary(row, board_slug=bslug)
+                rec["runs"] = []
+                rec.update(runs.get(rec["id"], {}))
+                rec["children"] = children.get(rec["id"], [])
+                rec["parents"] = parents.get(rec["id"], [])
+                all_tasks.append(rec)
+                if rec["label"]:
+                    label_counts[rec["label"]] = label_counts.get(rec["label"], 0) + 1
+        finally:
+            conn.close()
+
+    labels = sorted(
+        ({"label": k, "count": v} for k, v in label_counts.items()),
+        key=lambda item: (-item["count"], item["label"]),
+    )
+
+    return {
+        "board": "all",
+        "generated_at": int(time.time()),
+        "tasks": all_tasks,
+        "labels": labels,
+    }
+
+
+@router.get("/gantt")
+def get_gantt(board: Optional[str] = Query(None)):
+    """Full board snapshot for the Gantt: tasks + labels + link graph."""
+    slug = _resolve_board(board)
+    return _read_gantt(slug)
+
+
+# ---------------------------------------------------------------------------
+# Bulk operations (MUST be declared before /tasks/{task_id} to avoid matching "bulk" as task_id)
+# ---------------------------------------------------------------------------
+
+class BulkStatusBody(BaseModel):
+    ids: list[str]
+    action: Optional[str] = None
+    status: Optional[str] = None
+    assignee: Optional[str] = None  # None/'' to assign or unassign in bulk
+    archive: bool = False
+    result: Optional[str] = None
+    summary: Optional[str] = None
+
+
+@router.post("/tasks/bulk")
+def bulk_change_status(payload: BulkStatusBody, board: Optional[str] = Query(None)):
+    """Apply an action/status update or mass-assign to multiple task ids in a single batch."""
+    from hermes_cli import kanban_db
+
+    slug = _resolve_board(board)
+    if slug in ("all", "*"):
+        # Map each task to its owning board and group operations
+        task_boards = {}
+        for tid in payload.ids:
+            tb = _find_task_board(tid)
+            if tb:
+                task_boards.setdefault(tb, []).append(tid)
+
+        results = []
+        for bslug, tids in task_boards.items():
+            sub_payload = BulkStatusBody(
+                ids=tids,
+                action=payload.action,
+                status=payload.status,
+                assignee=payload.assignee,
+                archive=payload.archive,
+                result=payload.result,
+                summary=payload.summary
+            )
+            sub_res = bulk_change_status(sub_payload, board=bslug)
+            results.extend(sub_res.get("results", []))
+
+        # Check if some ids were not found
+        processed = {r["id"] for r in results}
+        for tid in payload.ids:
+            if tid not in processed:
+                results.append({"id": tid, "ok": False, "error": f"task {tid} not found on any board"})
+        return {"results": results}
+
+    conn = _connect(slug, ro=False)
+    results = []
+    try:
+        if payload.assignee is not None:
+            # Mass assignment
+            assignee_val = payload.assignee.strip() or None
+            for tid in payload.ids:
+                try:
+                    ok = kanban_db.assign_task(conn, tid, assignee_val)
+                    results.append({"id": tid, "ok": bool(ok)})
+                except Exception as exc:
+                    results.append({"id": tid, "ok": False, "error": str(exc)})
+            return {"results": results}
+
+        action = (payload.action or payload.status or "").strip().lower()
+        if payload.archive:
+            action = "archive"
+        if action == "restore":
+            action = "done"
+        if action not in _ACTIONS:
+            raise HTTPException(status_code=400, detail=f"unknown action: {action}")
+
+        dummy_status = StatusBody(action=action, result=payload.result, summary=payload.summary)
+        for tid in payload.ids:
+            try:
+                ok = _apply_action(conn, kanban_db, action, tid, dummy_status)
+                results.append({"id": tid, "ok": bool(ok)})
+            except Exception as exc:
+                results.append({"id": tid, "ok": False, "error": str(exc)})
+        return {"results": results}
+    finally:
+        conn.close()
+
+
+def _find_task_board(task_id: str) -> Optional[str]:
+    """Find which board owns task_id among all discovered boards."""
+    for b in list_boards().get("boards", []):
+        bslug = b["slug"]
+        try:
+            conn = _connect(bslug, ro=True)
+            row = conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            conn.close()
+            if row:
+                return bslug
+        except Exception:
+            pass
+    return None
+
+
+@router.get("/tasks/{task_id}")
+def get_task(task_id: str, board: Optional[str] = Query(None)):
+    """Task detail: full record + comments + events + links (for the drawer)."""
+    slug = _resolve_board(board)
+    if slug in ("all", "*"):
+        found = _find_task_board(task_id)
+        if found:
+            slug = found
+        else:
+            slug = _resolve_board(None)
+            if slug in ("all", "*"):
+                slug = "default"
+    conn = _connect(slug, ro=True)
+    conn.row_factory = sqlite3.Row  # kanban_db Task.from_row expects Row rows
+    try:
+        from hermes_cli import kanban_db
+        detail = _task_detail(conn, task_id)
+        detail["comments"] = [c.__dict__ if hasattr(c, "__dict__") else c
+                              for c in kanban_db.list_comments(conn, task_id)]
+        detail["events"] = [e.__dict__ if hasattr(e, "__dict__") else e
+                            for e in kanban_db.list_events(conn, task_id)]
+        detail["runs"] = [
+            {
+                "id": r[0],
+                "profile": r[1],
+                "status": r[2],
+                "outcome": r[3],
+                "summary": r[4],
+                "started_at": r[5],
+                "ended_at": r[6],
+                "error": r[7],
+            }
+            for r in conn.execute(
+                "SELECT id, profile, status, outcome, summary, started_at, ended_at, error "
+                "FROM task_runs WHERE task_id = ? ORDER BY id DESC",
+                (task_id,),
+            ).fetchall()
+        ]
+        # dependency titles for the drawer (Blocked by / Blocks)
+        detail["dependencies"] = [
+            {"id": pid, "title": _short_title(conn, pid), "relation": "parent"}
+            for pid in detail["parents"]
+        ] + [
+            {"id": cid, "title": _short_title(conn, cid), "relation": "child"}
+            for cid in detail["children"]
+        ]
+        return {"task": detail}
+    finally:
+        conn.close()
+
+
+def _short_title(conn: sqlite3.Connection, task_id: str) -> str:
+    row = conn.execute("SELECT title FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    return (row[0] or task_id)[:80] if row else task_id
+
+
+# ---------------------------------------------------------------------------
+# Writes — thin wrappers over the kanban_db domain layer (invariants kept).
+# ---------------------------------------------------------------------------
+
+class StatusBody(BaseModel):
+    action: str                 # see _ACTIONS below
+    result: Optional[str] = None
+    summary: Optional[str] = None
+    reason: Optional[str] = None
+    target: Optional[str] = None   # for 'ready'/'todo' direct writes
+
+
+# GANTT-6 action matrix — every transition routes through the domain layer.
+_ACTIONS = (
+    "done", "blocked", "unblock", "review", "reopen", "archive",
+    "ready", "todo", "triage", "delete", "restore",
+)
+
+
+def _apply_action(conn, kanban_db, action: str, task_id: str, payload: StatusBody) -> bool:
+    if action == "done":
+        return kanban_db.complete_task(conn, task_id,
+                                       result=payload.result,
+                                       summary=payload.summary)
+    if action == "blocked":
+        return kanban_db.block_task(conn, task_id, reason=payload.reason)
+    if action == "unblock":
+        return kanban_db.unblock_task(conn, task_id)
+    if action == "review":
+        return kanban_db.request_review(conn, task_id,
+                                        summary=payload.summary or payload.reason,
+                                        force=True)
+    if action == "reopen":
+        return kanban_db.reopen_review_task(conn, task_id)
+    if action == "archive":
+        return kanban_db.archive_task(conn, task_id)
+    if action == "ready":
+        # promote / return to ready: unblock if parked, else a direct write
+        # (parent gating enforced inside _set_status_direct)
+        cur = kanban_db.get_task(conn, task_id)
+        if cur is None:
+            return False
+        if cur.status in ("blocked", "scheduled"):
+            return kanban_db.unblock_task(conn, task_id)
+        from hermes_cli.kanban_db import _set_status_direct
+        return bool(_set_status_direct(conn, task_id, "ready"))
+    if action == "todo":
+        return bool(kanban_db.reopen_review_task(conn, task_id)) or _direct_status(conn, kanban_db, task_id, "todo")
+    if action == "triage":
+        return _direct_status(conn, kanban_db, task_id, "triage")
+    if action == "delete":
+        return bool(kanban_db.delete_task(conn, task_id))
+    raise ValueError(action)
+
+
+def _direct_status(conn, kanban_db, task_id: str, status: str) -> bool:
+    """Direct status write for non-standard transitions (triage, ready from
+    done…). Mirrors the dashboard's _set_status_direct semantics minimally:
+    refuses unknown ids, appends a status event."""
+    cur = conn.execute(
+        "UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
+    if cur.rowcount != 1:
+        return False
+    kanban_db.add_comment(conn, task_id, author="gantt",
+                          body=f"status set to {status} (gantt)")
+    return True
+
+
+@router.patch("/tasks/{task_id}/status")
+def change_status(task_id: str, payload: StatusBody, board: Optional[str] = Query(None)):
+    """Transition a task via the domain layer (parent gating, run close, events)."""
+    from hermes_cli import kanban_db
+
+    action = (payload.action or "").strip().lower()
+    if action == "restore":
+        action = "done"  # unarchive: the domain's restore path is complete_task-like
+    if action not in _ACTIONS:
+        raise HTTPException(status_code=400, detail=f"unknown action: {action}")
+
+    slug = _resolve_board(board)
+    if slug in ("all", "*"):
+        found = _find_task_board(task_id)
+        if found:
+            slug = found
+        else:
+            slug = _resolve_board(None)
+            if slug in ("all", "*"):
+                slug = "default"
+    conn = _connect(slug, ro=False)
+    try:
+        ok = _apply_action(conn, kanban_db, action, task_id, payload)
+        if not ok:
+            raise HTTPException(
+                status_code=409,
+                detail=f"transition '{action}' refused for {task_id} (state/parent gating)",
+            )
+        return {"ok": True, "task_id": task_id, "action": action}
+    finally:
+        conn.close()
+
+
+class CommentBody(BaseModel):
+    body: str
+    author: Optional[str] = "gantt"
+
+
+@router.post("/tasks/{task_id}/comments")
+def add_comment(task_id: str, payload: CommentBody, board: Optional[str] = Query(None)):
+    from hermes_cli import kanban_db
+
+    if not (payload.body or "").strip():
+        raise HTTPException(status_code=400, detail="body is required")
+    slug = _resolve_board(board)
+    if slug in ("all", "*"):
+        found = _find_task_board(task_id)
+        if found:
+            slug = found
+        else:
+            slug = _resolve_board(None)
+            if slug in ("all", "*"):
+                slug = "default"
+    conn = _connect(slug, ro=False)
+    try:
+        if kanban_db.get_task(conn, task_id) is None:
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        kanban_db.add_comment(conn, task_id,
+                              author=payload.author or "gantt",
+                              body=payload.body)
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+class AssignBody(BaseModel):
+    profile: Optional[str] = None   # None/'' = unassign
+
+
+@router.patch("/tasks/{task_id}/assignee")
+def assign(task_id: str, payload: AssignBody, board: Optional[str] = Query(None)):
+    from hermes_cli import kanban_db
+
+    slug = _resolve_board(board)
+    if slug in ("all", "*"):
+        found = _find_task_board(task_id)
+        if found:
+            slug = found
+        else:
+            slug = _resolve_board(None)
+            if slug in ("all", "*"):
+                slug = "default"
+    conn = _connect(slug, ro=False)
+    try:
+        ok = kanban_db.assign_task(conn, task_id, (payload.profile or "").strip() or None)
+        if not ok:
+            raise HTTPException(status_code=409, detail=f"assign refused for {task_id}")
+        return {"ok": True, "task_id": task_id}
+    finally:
+        conn.close()
+
+
+@router.get("/meta")
+def _meta():
+    return {
+        "name": "kanban-day-gantt",
+        "board": _resolve_board(None),
+        "endpoint": "/gantt",
+        "writes": True,
+    }
+
+
+def create_app(allow_cors: bool = True) -> FastAPI:
+    """Standalone FastAPI app (dev/remote mode) serving the router at the root."""
+    app = FastAPI(title="kanban-day-gantt backend", version="2.1.0")
+    if allow_cors:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,
+            allow_methods=["GET", "PATCH", "POST", "OPTIONS"],
+            allow_headers=["*"],
+        )
+    app.include_router(router)
+    return app
+
+
+def main() -> None:
+    import argparse
+
+    import uvicorn
+
+    parser = argparse.ArgumentParser(
+        description="Standalone kanban-day-gantt backend (/boards, /gantt, /tasks/*).",
+    )
+    parser.add_argument("--host", default=os.environ.get("KANBAN_GANTT_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("KANBAN_GANTT_PORT", "8765")))
+    parser.add_argument("--no-cors", action="store_true")
+    args = parser.parse_args()
+
+    print(f"kanban-day-gantt backend on http://{args.host}:{args.port}")
+    uvicorn.run(create_app(allow_cors=not args.no_cors), host=args.host, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,86 @@
+const __cn = (...parts) => parts.filter(Boolean).join(' ')
+const __atom = initial => {
+  let value = initial
+  return { get: () => value, set: v => { value = v }, subscribe: () => () => {} }
+}
+const __profileColor = () => '#888888'
+const __profileColorSoft = () => 'rgba(136,136,136,0.2)'
+const __useMutation = options => ({
+  mutate: vars => {
+    if (options && typeof options.mutationFn === 'function') {
+      Promise.resolve(options.mutationFn(vars)).catch(() => {})
+    }
+  },
+  isPending: false
+})
+const __usePluginI18n = () => ((path, ...args) => String(path))
+const __useQueryClient = () => ({ invalidateQueries: () => {} })
+const __useValue = a => (a && typeof a.get === 'function' ? a.get() : undefined)
+const stubQueryData = {"kanban-day-gantt|boards":{"boards":[{"slug":"fixture","label":"Fixture board","total":5}],"current":"fixture"},"kanban-day-gantt|gantt":{"total":5,"tasks":[{"id":"t_run","title":"Running task (today)","status":"running","assignee":"alice","created_at":1790657706,"started_at":1790657706,"archived":false,"runs":[{"id":1,"started_at":1790657706,"ended_at":1790658006,"outcome":"rate_limited"},{"id":2,"started_at":1790659506,"ended_at":null,"status":"running"}]},{"id":"t_todo_today","title":"Todo created today","status":"todo","created_at":1790660706,"archived":false},{"id":"t_todo_old","title":"Todo created long ago","status":"todo","created_at":1790352000,"archived":false},{"id":"t_done","title":"DONE task must be hidden","status":"done","created_at":1790654106,"completed_at":1790659506,"archived":false},{"id":"t_arch","title":"ARCHIVED task must be hidden","status":"archived","created_at":1790574906,"archived":true}]}}
+const __useQuery = options => {
+  const key = options && Array.isArray(options.queryKey) ? options.queryKey.join('|') : ''
+  let data
+  if (key.includes('|boards')) data = stubQueryData['kanban-day-gantt|boards']
+  else if (key.includes('|gantt')) data = stubQueryData['kanban-day-gantt|gantt']
+  return { data, isLoading: false, isError: false, error: null, refetch: async () => {} }
+}
+const sdk = {
+  "Badge": "Badge",
+  "Button": "Button",
+  "Codicon": "Codicon",
+  "Contribute": "Contribute",
+  "DropdownMenu": "DropdownMenu",
+  "DropdownMenuContent": "DropdownMenuContent",
+  "DropdownMenuItem": "DropdownMenuItem",
+  "DropdownMenuSeparator": "DropdownMenuSeparator",
+  "DropdownMenuTrigger": "DropdownMenuTrigger",
+  "EmptyState": "EmptyState",
+  "ErrorState": "ErrorState",
+  "Loader": "Loader",
+  "PALETTE_AREA": "palette",
+  "ROUTES_AREA": "routes",
+  "SIDEBAR_NAV_AREA": "sidebar.nav",
+  "Streamdown": "Streamdown",
+  "Switch": "Switch",
+  "TITLEBAR_AREAS": {
+    "left": "titleBar.left",
+    "center": "titleBar.center",
+    "right": "titleBar.right"
+  },
+  "queryClient": {}
+}
+sdk.host = { navigate: path => calls.navigate.push(path) }
+sdk.atom = __atom
+sdk.useValue = __useValue
+sdk.useMutation = __useMutation
+sdk.useQuery = __useQuery
+export default sdk
+export const cn = __cn
+export const atom = __atom
+export const profileColor = __profileColor
+export const profileColorSoft = __profileColorSoft
+export const useMutation = __useMutation
+export const usePluginI18n = __usePluginI18n
+export const useQuery = __useQuery
+export const useQueryClient = __useQueryClient
+export const useValue = __useValue
+export const host = sdk.host
+export const Badge = sdk.Badge
+export const Button = sdk.Button
+export const Codicon = sdk.Codicon
+export const Contribute = sdk.Contribute
+export const DropdownMenu = sdk.DropdownMenu
+export const DropdownMenuContent = sdk.DropdownMenuContent
+export const DropdownMenuItem = sdk.DropdownMenuItem
+export const DropdownMenuSeparator = sdk.DropdownMenuSeparator
+export const DropdownMenuTrigger = sdk.DropdownMenuTrigger
+export const EmptyState = sdk.EmptyState
+export const ErrorState = sdk.ErrorState
+export const Loader = sdk.Loader
+export const PALETTE_AREA = sdk.PALETTE_AREA
+export const ROUTES_AREA = sdk.ROUTES_AREA
+export const SIDEBAR_NAV_AREA = sdk.SIDEBAR_NAV_AREA
+export const Streamdown = sdk.Streamdown
+export const Switch = sdk.Switch
+export const TITLEBAR_AREAS = sdk.TITLEBAR_AREAS
+export const queryClient = sdk.queryClient
