@@ -152,6 +152,15 @@ function localDayStart(sec) {
 var WINDOW_BACK = 24 * 3600;
 var WINDOW_AHEAD = 48 * 3600;
 var MIN_WINDOW = 2 * 3600;
+function splitDuration(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  return {
+    d: Math.floor(s / 86400),
+    h: Math.floor(s % 86400 / 3600),
+    m: Math.floor(s % 3600 / 60),
+    s: s % 60
+  };
+}
 function computeRollingDomain(nowSec) {
   return { min: nowSec - WINDOW_BACK, max: nowSec + WINDOW_AHEAD };
 }
@@ -396,6 +405,31 @@ function Ruler({ min, max, pxPerSec, now, onResetView, onWindow }) {
     ]
   });
 }
+function rawRunSeconds(task, bar) {
+  if (bar.runId != null && Array.isArray(task.runs)) {
+    const r = task.runs.find((x) => x && x.id === bar.runId);
+    if (r && r.started_at != null && r.ended_at != null && r.ended_at > r.started_at) {
+      return r.ended_at - r.started_at;
+    }
+  }
+  const rs = task.run_started_at;
+  const re = task.run_ended_at;
+  if (rs != null && re != null && re > rs) return re - rs;
+  const span = (bar.t1 ?? bar.t0) - bar.t0;
+  return span > 0 ? span : null;
+}
+function formatDuration(sec, i18n) {
+  const p = splitDuration(sec);
+  const all = [[p.d, i18n.unitDay], [p.h, i18n.unitHour], [p.m, i18n.unitMin], [p.s, i18n.unitSec]];
+  const first = all.findIndex(([v]) => v > 0);
+  if (first === -1) return `0${i18n.unitSec}`;
+  const parts = [];
+  for (let i = first; i < all.length && parts.length < 2; i++) {
+    const [v, u] = all[i];
+    if (v > 0) parts.push(`${v}${u}`);
+  }
+  return parts.join("");
+}
 function Bar({ task, bar, pxPerSec, min, max, onOpen }) {
   const i18n = useGanttI18n();
   const start = Math.max(bar.t0, min);
@@ -408,7 +442,8 @@ function Bar({ task, bar, pxPerSec, min, max, onOpen }) {
   if (bar.kind === "done") {
     style.background = tone === "var(--ui-text-tertiary)" ? "#60a5fa" : tone;
     style.opacity = "0.85";
-    title = `${task.title} · ${i18n.tipDone}`;
+    const ranSec = rawRunSeconds(task, bar);
+    title = `${task.title} · ${ranSec != null ? i18n.tipDoneRan(formatDuration(ranSec, i18n)) : i18n.tipDone}`;
   } else if (bar.kind === "done-instant") {
     style.background = tone === "var(--ui-text-tertiary)" ? "#60a5fa" : tone;
     style.opacity = "0.55";
@@ -865,6 +900,11 @@ var GANTT_LOCALES = {
     clickForDetail: "click for details",
     tipDone: "done (real run)",
     tipDoneUnknown: "done (unknown duration)",
+    tipDoneRan: (d) => `done (ran ${d})`,
+    unitDay: "d",
+    unitHour: "h",
+    unitMin: "m",
+    unitSec: "s",
     tipRunning: "in progress",
     tipTodo: "not started",
     tipSelect: (name) => `Select ${name}`,
@@ -968,6 +1008,11 @@ var GANTT_LOCALES = {
     clickForDetail: "点击查看详情",
     tipDone: "已完成（真实运行时长）",
     tipDoneUnknown: "已完成（时长未知）",
+    tipDoneRan: (d) => `已完成（实际运行 ${d}）`,
+    unitDay: "天",
+    unitHour: "小时",
+    unitMin: "分",
+    unitSec: "秒",
     tipRunning: "进行中",
     tipTodo: "未开始",
     tipSelect: (name) => `选择 ${name}`,

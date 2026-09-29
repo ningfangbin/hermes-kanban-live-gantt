@@ -80,7 +80,7 @@ const MIN_BAR_SEC = 2 * 3600     // 2h — minimum visible bar length
 const ZOOM_MAX_PX_PER_HOUR = 240
 
 /* ────────────────────── gantt-core (pure logic, Node-tested) ─────────────── */
-import { taskBars, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY, slideWindowByPixels, resizeWindow } from './core/gantt-core.ts'
+import { taskBars, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY, slideWindowByPixels, resizeWindow, splitDuration } from './core/gantt-core.ts'
 
 /* ──────────────────────────────── data doors ──────────────────────────────── */
 
@@ -298,6 +298,37 @@ function Ruler({ min, max, pxPerSec, now, onResetView, onWindow }) {
   })
 }
 
+/** Exact run duration (seconds) of a done bar. Raw run timestamps win — the
+ *  bar SPAN is min-clamped for display (MIN_BAR = 2 h), so a 5-minute run
+ *  would otherwise read as "2h" in the tooltip. */
+function rawRunSeconds(task, bar) {
+  if (bar.runId != null && Array.isArray(task.runs)) {
+    const r = task.runs.find(x => x && x.id === bar.runId)
+    if (r && r.started_at != null && r.ended_at != null && r.ended_at > r.started_at) {
+      return r.ended_at - r.started_at
+    }
+  }
+  const rs = task.run_started_at
+  const re = task.run_ended_at
+  if (rs != null && re != null && re > rs) return re - rs
+  const span = (bar.t1 ?? bar.t0) - bar.t0
+  return span > 0 ? span : null
+}
+
+/** Compact human duration for tooltips — at most two units (1d2h / 3h5m / 45s). */
+function formatDuration(sec, i18n) {
+  const p = splitDuration(sec)
+  const all = [[p.d, i18n.unitDay], [p.h, i18n.unitHour], [p.m, i18n.unitMin], [p.s, i18n.unitSec]]
+  const first = all.findIndex(([v]) => v > 0)
+  if (first === -1) return `0${i18n.unitSec}`
+  const parts = []
+  for (let i = first; i < all.length && parts.length < 2; i++) {
+    const [v, u] = all[i]
+    if (v > 0) parts.push(`${v}${u}`)
+  }
+  return parts.join('')
+}
+
 function Bar({ task, bar, pxPerSec, min, max, onOpen }) {
   const i18n = useGanttI18n()
   // Day window clipping: keep only the [min, max) part of the bar.
@@ -313,7 +344,8 @@ function Bar({ task, bar, pxPerSec, min, max, onOpen }) {
   if (bar.kind === 'done') {
     style.background = tone === 'var(--ui-text-tertiary)' ? '#60a5fa' : tone
     style.opacity = '0.85'
-    title = `${task.title} · ${i18n.tipDone}`
+    const ranSec = rawRunSeconds(task, bar)
+    title = `${task.title} · ${ranSec != null ? i18n.tipDoneRan(formatDuration(ranSec, i18n)) : i18n.tipDone}`
   } else if (bar.kind === 'done-instant') {
     style.background = tone === 'var(--ui-text-tertiary)' ? '#60a5fa' : tone
     style.opacity = '0.55'
@@ -825,6 +857,11 @@ const GANTT_LOCALES = {
     clickForDetail: 'click for details',
     tipDone: 'done (real run)',
     tipDoneUnknown: 'done (unknown duration)',
+    tipDoneRan: d => `done (ran ${d})`,
+    unitDay: 'd',
+    unitHour: 'h',
+    unitMin: 'm',
+    unitSec: 's',
     tipRunning: 'in progress',
     tipTodo: 'not started',
     tipSelect: name => `Select ${name}`,
@@ -928,6 +965,11 @@ const GANTT_LOCALES = {
     clickForDetail: '点击查看详情',
     tipDone: '已完成（真实运行时长）',
     tipDoneUnknown: '已完成（时长未知）',
+    tipDoneRan: d => `已完成（实际运行 ${d}）`,
+    unitDay: '天',
+    unitHour: '小时',
+    unitMin: '分',
+    unitSec: '秒',
     tipRunning: '进行中',
     tipTodo: '未开始',
     tipSelect: name => `选择 ${name}`,

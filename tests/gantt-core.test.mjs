@@ -11,7 +11,8 @@ import {
   DAY, MIN_BAR, statusTone,
   barRange, taskBars, shortId, matchesSearch, buildRows,
   isActive, localDayStart, dayStartsBetween, computeRollingDomain, daySegments, taskVisible, barInWindow, hourTickPlan,
-  slideWindow, slideWindowByPixels, resizeWindow, MIN_WINDOW, WINDOW_BACK, WINDOW_AHEAD } from '../desktop/gantt-core.js'
+  slideWindow, slideWindowByPixels, resizeWindow, MIN_WINDOW, WINDOW_BACK, WINDOW_AHEAD,
+  splitDuration } from '../desktop/gantt-core.js'
 
 const NOW = 1_800_000_000 // fixed clock for the pure logic tests
 
@@ -56,6 +57,14 @@ test('window helpers — slide, pixel-slide, one-edge resize (MIN_WINDOW floor)'
   assert.equal(MIN_WINDOW, 2 * 3600)
   assert.equal(WINDOW_BACK, 24 * 3600)
   assert.equal(WINDOW_AHEAD, 48 * 3600)
+})
+
+test('splitDuration — d/h/m/s parts for done-bar tooltip durations', () => {
+  assert.deepEqual(splitDuration(0), { d: 0, h: 0, m: 0, s: 0 })
+  assert.deepEqual(splitDuration(45), { d: 0, h: 0, m: 0, s: 45 })
+  assert.deepEqual(splitDuration(3661), { d: 0, h: 1, m: 1, s: 1 })
+  assert.deepEqual(splitDuration(90 * 3600 + 61), { d: 3, h: 18, m: 1, s: 1 })
+  assert.deepEqual(splitDuration(-5), { d: 0, h: 0, m: 0, s: 0 }) // negative -> zeroed
 })
 
 test('daySegments — rolling window splits into local days (partial ends kept)', () => {

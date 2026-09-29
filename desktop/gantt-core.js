@@ -121,6 +121,15 @@ function dayStartsBetween(min, max) {
 var WINDOW_BACK = 24 * 3600;
 var WINDOW_AHEAD = 48 * 3600;
 var MIN_WINDOW = 2 * 3600;
+function splitDuration(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  return {
+    d: Math.floor(s / 86400),
+    h: Math.floor(s % 86400 / 3600),
+    m: Math.floor(s % 3600 / 60),
+    s: s % 60
+  };
+}
 function computeRollingDomain(nowSec) {
   return { min: nowSec - WINDOW_BACK, max: nowSec + WINDOW_AHEAD };
 }
@@ -200,6 +209,7 @@ export {
   shortId,
   slideWindow,
   slideWindowByPixels,
+  splitDuration,
   statusTone,
   taskBars,
   taskVisible

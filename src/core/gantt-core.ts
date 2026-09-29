@@ -159,6 +159,18 @@ export const WINDOW_BACK = 24 * 3600;   // default window: now − 24 h …
 export const WINDOW_AHEAD = 48 * 3600;  // … → now + 48 h (72 h total)
 export const MIN_WINDOW = 2 * 3600;     // edge drags never shrink below 2 h
 
+/** Split a duration in seconds into day/hour/minute/second parts — for bar
+ *  tooltips (computed from raw run spans, never from window-clamped bars). */
+export function splitDuration(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  return {
+    d: Math.floor(s / 86400),
+    h: Math.floor((s % 86400) / 3600),
+    m: Math.floor((s % 3600) / 60),
+    s: s % 60
+  };
+}
+
 /** The default day-view window — anchored on the current moment, not on a
  *  fixed day count; the UI re-anchors it on refresh until the user slides it. */
 export function computeRollingDomain(nowSec) {
