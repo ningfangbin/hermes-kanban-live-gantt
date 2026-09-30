@@ -72,10 +72,11 @@ it**. The window is not fixed:
 - **Double-click the ruler** (or the `↺ window` / `×N` toolbar chips) — reset
   to the default window and zoom.
 
-A manually placed window stays exactly there (refreshes and board switches do
-not move it; it is not persisted — a reload returns to the default). The "now"
-line only shows while now is inside the window; today's calendar cell stays
-highlighted. A row appears iff at least one of the task's segments (waiting
+A manually placed window stays exactly there — refreshes and board switches do
+not move it, and it **survives leaving and re-entering the view** (persisted
+via `ctx.storage['window']`); the `↺ window` chip resets it to the default.
+The "now" line only shows while now is inside the window; today's calendar
+cell stays highlighted. A row appears iff at least one of the task's segments (waiting
 or run) overlaps the window — see **Rendering model** below.
 
 **Done is optional:** a **Done** entry sits in the status filter (same place as

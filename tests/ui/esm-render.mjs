@@ -248,6 +248,7 @@ const ctx = {
     get: (k, fb) => (k === 'board' ? 'fixture'
       : k === 'zoom' && globalThis.__ZOOM__ ? globalThis.__ZOOM__
       : k === 'showDone' && globalThis.__SHOWDONE__ ? true
+      : k === 'window' && globalThis.__WINDOW__ ? globalThis.__WINDOW__
       : fb),
     set: () => {}
   },
@@ -280,6 +281,7 @@ check(styleElements.length >= 1 || true, 'register injected page style (shim)')
 // 3) render the page from the stubbed snapshot
 // ---------------------------------------------------------------------------
 globalThis.__ZOOM__ = 6 // zoomed ~6× — the ruler must switch to hour ticks
+globalThis.__WINDOW__ = { min: now - 6 * 3600, max: now + 6 * 3600 } // a stored manual window must be restored on mount
 let pageNode
 try {
   pageNode = page.render()
@@ -302,6 +304,7 @@ if (pageNode) {
   check(flat.includes('kg-wait'), 'waiting segments render (dashed)')
   check(flat.includes('kg-live'), 'the running segment renders (live, ends at now)')
   check(flat.indexOf('Running task (today)') < flat.indexOf('Todo created long ago'), 'rows ordered by recency (running first)')
+  check(flat.includes('resetWindow'), 'a stored manual window is restored on mount (↺ chip shown)')
   const hourLabels = flat.match(/\b\d{2}:00\b/g) || []
   check(hourLabels.length >= 3, 'zoomed render shows hour tick labels (' + hourLabels.slice(0, 4).join(' ') + ')')
   check(flat.includes('cursor-col-resize'), 'ruler renders the window end handles (drag to move start/end)')

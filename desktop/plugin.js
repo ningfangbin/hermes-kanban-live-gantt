@@ -1845,7 +1845,23 @@ function KanbanGanttPage() {
     const saved = storage ? Number(storage.get("zoom", null)) : NaN;
     return Number.isFinite(saved) && saved >= 1 ? saved : 1;
   });
-  const [win, setWin] = useState(null);
+  const [win, setWin] = useState(() => {
+    if (!storage) return null;
+    try {
+      const raw = storage.get("window", null);
+      const v = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!v || !Number.isFinite(v.min) || !Number.isFinite(v.max)) return null;
+      let min = v.min;
+      let max = v.max;
+      if (min > 1e12 || max > 1e12) {
+        min = min / 1e3;
+        max = max / 1e3;
+      }
+      return max > min ? { min: Math.round(min), max: Math.round(max) } : null;
+    } catch {
+      return null;
+    }
+  });
   const containerRef = useRef(null);
   const scrollerRef = useRef(null);
   const [trackW, setTrackW] = useState(0);
@@ -1979,9 +1995,12 @@ function KanbanGanttPage() {
     setZoom(1);
     setWin(null);
     if (storage) storage.set("zoom", 1);
+    if (storage) storage.set("window", null);
   };
   const applyWindow = (next) => {
-    setWin({ min: Math.round(next.min), max: Math.round(next.max) });
+    const snapped = { min: Math.round(next.min), max: Math.round(next.max) };
+    setWin(snapped);
+    if (storage) storage.set("window", snapped);
   };
   const zoomAnchorRef = useRef(null);
   useEffect(() => {

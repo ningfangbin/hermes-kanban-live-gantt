@@ -1817,9 +1817,22 @@ export function KanbanGanttPage() {
   })
   // The time window: null = default rolling window (now −24h → now +48h,
   // re-anchored on every refresh); an object = user-slid/resized window kept
-  // exactly as placed until "reset view". Not persisted — a reload returns to
-  // the default.
-  const [win, setWin] = useState(null)
+  // exactly as placed. Persisted via ctx.storage ('window') — leaving the view
+  // and coming back restores it; the ↺ chip resets to the default.
+  const [win, setWin] = useState(() => {
+    if (!storage) return null
+    try {
+      const raw = storage.get('window', null)
+      const v = typeof raw === 'string' ? JSON.parse(raw) : raw
+      if (!v || !Number.isFinite(v.min) || !Number.isFinite(v.max)) return null
+      let min = v.min
+      let max = v.max
+      if (min > 1e12 || max > 1e12) { min = min / 1000; max = max / 1000 } // ms → s guard
+      return max > min ? { min: Math.round(min), max: Math.round(max) } : null
+    } catch {
+      return null
+    }
+  })
   const containerRef = useRef(null)
   const scrollerRef = useRef(null)
   const [trackW, setTrackW] = useState(0)
@@ -1984,9 +1997,12 @@ export function KanbanGanttPage() {
     setZoom(1)
     setWin(null)
     if (storage) storage.set('zoom', 1)
+    if (storage) storage.set('window', null)
   }
   const applyWindow = next => {
-    setWin({ min: Math.round(next.min), max: Math.round(next.max) })
+    const snapped = { min: Math.round(next.min), max: Math.round(next.max) }
+    setWin(snapped)
+    if (storage) storage.set('window', snapped)
   }
   const zoomAnchorRef = useRef(null)
   useEffect(() => {
