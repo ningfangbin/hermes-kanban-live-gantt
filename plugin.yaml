@@ -1,5 +1,5 @@
 name: kanban-live-gantt
-version: "0.1.2"
+version: "0.1.3"
 description: "Live Gantt for the Hermes kanban boards — a now-centered, slidable 72 h timeline (default now -24 h -> now +48 h; drag to move, drag the ends to resize) with hour-granularity wheel zoom, a now-line, status filtering and an optional done lane. Fork of kanban-gantt (GPL-3.0)."
 author: ningfangbin (fork of kanban-gantt by e-is)
 kind: standalone

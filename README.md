@@ -16,8 +16,10 @@ see [Credits & license](#credits--license).
 | Window length | zoom slider (20 %–180 %) | user-controlled — **wheel = free zoom** (×1 fit → 240 px/h); the window slides/resizes freely (min 2 h), reset restores the default |
 | Day cells | UTC-based ticks | local-midnight cells; today highlighted ("今天 / Today") |
 | Now marker | none | thin accent **now line** with time label |
-| Bars | full extents | clipped to the window; bars fully outside are not drawn (row shows "—") |
-| i18n | en + fr | **en + zh** (full coverage, 76 keys aligned; sidebar/palette labels follow the app language) + straggler French removed |
+| Bars | full extents, 2 h minimum length, running bars drawn into the future | **lifecycle segments** — dashed waiting spans ↔ exact run spans (never stretched, never past "now"); a row shows iff a segment overlaps the window |
+| Row order | kanban order | **recency desc — running / most recently active on top** (children stay under their parents) |
+| Status colors | official kanban column tones | **own palette** — red = failure only, amber = blocked only, green = live only (see Rendering model) |
+| i18n | en + fr | **en + zh** (full coverage, 95 keys aligned; sidebar/palette labels follow the app language) + straggler French removed |
 
 Everything else (board switcher, filters, search, bulk actions, task drawer,
 write endpoints, resizable columns, header chrome) is unchanged.
@@ -26,7 +28,7 @@ write endpoints, resizable columns, header chrome) is unchanged.
 
 ```
 src/main.ts            # desktop renderer (single self-contained ESM module)
-src/core/gantt-core.ts # pure timeline logic (day window, bars, rows) — Node-testable
+src/core/gantt-core.ts # pure timeline logic (window, segments, recency rows) — Node-testable
 scripts/build.mjs      # esbuild → desktop/plugin.js + desktop/gantt-core.js
 dashboard/plugin_api.py# Python backend (FastAPI) — copy of the kanban-gantt backend
 dashboard/manifest.json# dashboard manifest (api entrypoint)
@@ -73,14 +75,39 @@ it**. The window is not fixed:
 A manually placed window stays exactly there (refreshes and board switches do
 not move it; it is not persisted — a reload returns to the default). The "now"
 line only shows while now is inside the window; today's calendar cell stays
-highlighted. Tasks appear only when they have activity in the window; an open
-task created days ago still gets a row, but no bar ("—").
+highlighted. A row appears iff at least one of the task's segments (waiting
+or run) overlaps the window — see **Rendering model** below.
 
 **Done is optional:** a **Done** entry sits in the status filter (same place as
 every other status toggle — also clickable in the footer legend), default
 **off**, persisted. It surfaces `done` tasks **that have activity inside the
 window** — a task that finished before the window stays out. `archived` never
 shows.
+
+## Rendering model (v0.1.3)
+
+Every task is drawn as an **alternating sequence of segments**, all clipped to
+the window:
+
+- **Waiting spans — dashed** (`#8a9099`): creation → first run, the gaps
+  between runs, and (while the task is unfinished) its last run → *now*. A
+  currently **blocked** task's waiting span is dashed **amber** (`#e0a13a`).
+- **Run spans — solid, exact**: `[started_at, ended_at]` at their real
+  length — short runs are **never stretched** (below 3 px they collapse to a
+  dot marker; zoom in for the exact width). A span still in progress ends at
+  *now* and glows green (`#34d399`); failed runs (`crashed`, `failed`,
+  `timed_out`, `gave_up`, `blocked`, `rate_limited`) are red (`#ef5350`);
+  finished runs are blue (`#5b8def`).
+- **Hand-completed tasks** (no run record) get a waiting span plus a small
+  round marker at `completed_at` ("unknown duration").
+
+**Rows** appear iff at least one segment overlaps the window, ordered **by
+recency — running first**; a parent floats up with its subtree, children stay
+nested. **Status colors** (row dot, filter dots, legend) use their own palette
+instead of the kanban column tones: `ready #4d9fff`, `running #34d399`,
+`review #f472b6`, `blocked #e0a13a`, `done #7c8798`, `scheduled #a78bfa`,
+`todo`/`triage` theme grays. Segment tooltips show exact durations ("waiting
+(3h5m so far)", "failed run (12m)").
 
 ## Free zoom (hour granularity)
 
@@ -107,3 +134,8 @@ the ends to resize) replacing the fixed day-count window, wheel zoom with hour
 ticks replacing the zoom slider, now-line, local-midnight day cells, **en + zh**
 i18n replacing en + fr, plugin renamed to `kanban-live-gantt` (from the working
 name `kanban-day-gantt`, which predated the slidable window).
+
+Model v0.1.3 additions: lifecycle segments (dashed waiting spans; exact run
+spans that never pass "now"), recency-descending rows (running first), and a
+re-designed non-kanban color palette (red = failure only, amber = blocked
+only, green = live only).

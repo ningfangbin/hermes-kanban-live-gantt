@@ -71,7 +71,7 @@ const ID = 'kanban-live-gantt'
 const LABEL_W = 300              // px — left task-name column (sticky)
 const ROW_H = 28                 // px — row height
 const BAR_H = 14                 // px — bar height inside a row
-const MIN_BAR_SEC = 2 * 3600     // 2h — minimum visible bar length
+// (v0.1.3) segments render at their exact length — minimum-bar stretching removed
 // The default window is now − 24h → now + 48h (WINDOW_BACK / WINDOW_AHEAD in
 // gantt-core, computeRollingDomain) — no day-count switch, and the window is
 // user-movable: drag the ruler to slide it, drag its ends to move start/end.
@@ -80,7 +80,7 @@ const MIN_BAR_SEC = 2 * 3600     // 2h — minimum visible bar length
 const ZOOM_MAX_PX_PER_HOUR = 240
 
 /* ────────────────────── gantt-core (pure logic, Node-tested) ─────────────── */
-import { taskBars, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY, slideWindowByPixels, resizeWindow, splitDuration } from './core/gantt-core.ts'
+import { taskSegments, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY, slideWindowByPixels, resizeWindow, splitDuration, SEG_TONE } from './core/gantt-core.ts'
 
 /* ──────────────────────────────── data doors ──────────────────────────────── */
 
@@ -298,23 +298,6 @@ function Ruler({ min, max, pxPerSec, now, onResetView, onWindow }) {
   })
 }
 
-/** Exact run duration (seconds) of a done bar. Raw run timestamps win — the
- *  bar SPAN is min-clamped for display (MIN_BAR = 2 h), so a 5-minute run
- *  would otherwise read as "2h" in the tooltip. */
-function rawRunSeconds(task, bar) {
-  if (bar.runId != null && Array.isArray(task.runs)) {
-    const r = task.runs.find(x => x && x.id === bar.runId)
-    if (r && r.started_at != null && r.ended_at != null && r.ended_at > r.started_at) {
-      return r.ended_at - r.started_at
-    }
-  }
-  const rs = task.run_started_at
-  const re = task.run_ended_at
-  if (rs != null && re != null && re > rs) return re - rs
-  const span = (bar.t1 ?? bar.t0) - bar.t0
-  return span > 0 ? span : null
-}
-
 /** Compact human duration for tooltips — at most two units (1d2h / 3h5m / 45s). */
 function formatDuration(sec, i18n) {
   const p = splitDuration(sec)
@@ -329,67 +312,54 @@ function formatDuration(sec, i18n) {
   return parts.join('')
 }
 
-function Bar({ task, bar, pxPerSec, min, max, onOpen }) {
+function Segment({ task, seg, pxPerSec, min, max, onOpen }) {
   const i18n = useGanttI18n()
-  // Day window clipping: keep only the [min, max) part of the bar.
-  const start = Math.max(bar.t0, min)
-  const end = Math.min(bar.t1 ?? bar.t0, max)
+  // Window clipping: draw only the [min, max] part of the segment. The
+  // tooltip duration always uses the RAW segment span.
+  const start = Math.max(seg.t0, min)
+  const end = Math.min(seg.t1, max)
   const left = Math.round((start - min) * pxPerSec)
+  const rawW = Math.max(0, (end - start) * pxPerSec)
+  const width = Math.max(Math.round(rawW), 3)
   const top = Math.round((ROW_H - BAR_H) / 2)
-  const tone = bar.tone || statusTone(task.status)
-  const style = { top: `${top}px`, height: `${BAR_H}px`, left: `${left}px`, cursor: 'pointer' }
+  const style = { top: `${top}px`, height: `${BAR_H}px`, left: `${left}px`, width: `${width}px`, cursor: 'pointer' }
+  const isWait = seg.kind === 'wait'
+  const isInstant = seg.instant === true
+  const dur = formatDuration(seg.t1 - seg.t0, i18n)
   let title = task.title
 
-  // Status tones from the official Kanban plugin (COLUMN_META) — unified style.
-  if (bar.kind === 'done') {
-    style.background = tone === 'var(--ui-text-tertiary)' ? '#60a5fa' : tone
-    style.opacity = '0.85'
-    const ranSec = rawRunSeconds(task, bar)
-    title = `${task.title} · ${ranSec != null ? i18n.tipDoneRan(formatDuration(ranSec, i18n)) : i18n.tipDone}`
-  } else if (bar.kind === 'done-instant') {
-    style.background = tone === 'var(--ui-text-tertiary)' ? '#60a5fa' : tone
+  if (isInstant) {
+    style.background = SEG_TONE.run
     style.opacity = '0.55'
-    style.width = style.width || '4px'
     style.borderRadius = '999px'
     title = `${task.title} · ${i18n.tipDoneUnknown}`
-  } else if (bar.kind === 'progress') {
-    // Gauge (option a): full track [start->now] with a pale tone + fill that
-    // grows over time; running cards get the machine-activity arc animation
-    // (same visual vocabulary as the official kanban plugin's kanban-arc).
-    style.background = `color-mix(in srgb, ${tone} 22%, transparent)`
-    style.border = `1px solid ${tone}`
-    title = `${task.title} · ${i18n.tipRunning}`
-  } else {
-    // todo/queued: minimal dashed bar bordered in the STATUS tone (blue for
-    // ready, etc.) so queued tasks are distinguishable at a glance
-    style.border = `1px dashed ${tone}`
+  } else if (isWait) {
+    // Waiting spans — dashed; amber while the task is blocked.
     style.background = 'transparent'
-    title = `${task.title} · ${i18n.tipTodo}`
+    style.border = `1.5px dashed ${seg.tone === 'blocked' ? SEG_TONE.blocked : SEG_TONE.wait}`
+    style.opacity = seg.tone === 'blocked' ? '0.95' : '0.8'
+    title = `${task.title} · ${seg.tone === 'blocked' ? i18n.tipBlockedWait(dur) : seg.ongoing ? i18n.tipWaitingFor(dur) : i18n.tipWaited(dur)}`
+  } else if (seg.tone === 'live') {
+    // The live span — ends at "now", soft glow.
+    style.background = SEG_TONE.live
+    style.boxShadow = `0 0 0 1px color-mix(in srgb, ${SEG_TONE.live} 65%, transparent), 0 0 9px color-mix(in srgb, ${SEG_TONE.live} 40%, transparent)`
+    title = `${task.title} · ${i18n.tipRunningFor(dur)}`
+  } else if (seg.tone === 'fail') {
+    style.background = SEG_TONE.fail
+    style.opacity = '0.95'
+    title = `${task.title} · ${i18n.tipFailRun(dur)}`
+  } else {
+    style.background = SEG_TONE.run
+    style.opacity = '0.92'
+    title = `${task.title} · ${task.status === 'done' ? i18n.tipDoneRan(dur) : i18n.tipRun(dur)}`
   }
+  // Sub-3px spans collapse to a dot marker (zoom in for the exact width).
+  if (!isInstant && rawW < 3) style.borderRadius = '999px'
 
-  style.width = `${Math.max(Math.round((end - start) * pxPerSec), 2)}px`
-
-  // Fill overlay for running gauges: fill portion = start->now already equals
-  // the track (option a), so the "half-full" look comes from the pale track +
-  // strong fill child below.
-  const children = []
-  if (bar.kind === 'progress') {
-    children.push(jsx('div', {
-      className: 'absolute rounded-sm',
-      style: {
-        left: 0, top: 0, bottom: 0, width: '100%',
-        background: tone, opacity: 0.75
-      }
-    }))
-    if (task.status === 'running') {
-      children.push(jsx('div', { className: 'kg-arc', style: { '--kanban-tone': tone } }))
-    }
-  }
+  const cls = 'absolute rounded-sm kg-bar hover:brightness-110 transition-all '
+    + (isInstant ? 'kg-dot' : isWait ? 'kg-wait' : seg.tone === 'live' ? 'kg-live' : seg.tone === 'fail' ? 'kg-fail' : 'kg-run')
   const onClick = onOpen ? () => onOpen(task.id) : undefined
-  if (bar.kind === 'done' || bar.kind === 'done-instant') {
-    return jsx('div', { className: 'absolute rounded-sm kg-bar hover:brightness-110 transition-all', style, title, onClick })
-  }
-  return jsxs('div', { className: 'absolute rounded-sm kg-bar hover:brightness-110 transition-all', style, title, onClick, children })
+  return jsx('div', { className: cls, style, title, onClick })
 }
 
 function cleanTitle(title, label, untitled) {
@@ -459,8 +429,8 @@ function ResizeHandle({ get, set, min, max, resetTo, storageKey, growDirection =
 function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onOpen, isSelected, isChecked, onToggleCheck, isEven, showBoardBadge }) {
   const i18n = useGanttI18n()
   const labelW = useValue($labelW)
-  // Live view: keep only bars overlapping the window (rows without one show "—").
-  const bars = taskBars(task, now).filter(b => barInWindow(b, min, max))
+  // Window-consistent rows: keep only segments overlapping the window.
+  const segs = taskSegments(task, now).filter(s => barInWindow(s, min, max))
   const label = task.label ? `[${task.label}]` : ''
   const name = cleanTitle(task.title, task.label, i18n.untitled)
   const isBlocked = task.status === 'blocked'
@@ -483,7 +453,7 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
       })
     : null
 
-  const dotColor = (bars.length > 0 ? bars[bars.length - 1]?.tone : null) || statusTone(task.status)
+  const dotColor = statusTone(task.status)
 
   // 2-col grid (label | timeline): the label cell is position:sticky left so
   // names stay visible while the timeline scrolls horizontally.
@@ -542,7 +512,7 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
           }),
           isBlocked
             ? jsx('span', {
-                className: 'inline-flex items-center justify-center shrink-0 text-[#f87171]',
+                className: 'inline-flex items-center justify-center shrink-0 text-[#e0a13a]',
                 title: i18n.tipBlocked,
                 children: jsx(Codicon, { name: 'warning', size: '0.85rem' })
               })
@@ -575,8 +545,8 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
       jsxs('div', {
         className: 'relative overflow-hidden',
         style: { height: `${ROW_H}px` },
-        children: bars.length > 0
-          ? bars.map((b, idx) => jsx(Bar, { key: b.runId || idx, task, bar: b, pxPerSec, min, max, onOpen }))
+        children: segs.length > 0
+          ? segs.map((s, idx) => jsx(Segment, { key: s.runId != null ? `run-${s.runId}` : `${s.kind}-${s.t0}-${idx}`, task, seg: s, pxPerSec, min, max, onOpen }))
           : [jsx('div', { key: 'empty', className: 'text-(--ui-text-quaternary) text-[10px]', children: '—' })]
       })
     ]
@@ -713,13 +683,27 @@ function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }
     })
   }
   const doneLabel = i18n.col?.done || STATUS_META.done.label
+  const segLegend = (color, label, dashed, isDot) => jsxs('span', {
+    className: 'inline-flex items-center gap-1.5',
+    children: [
+      jsx('span', {
+        className: 'shrink-0',
+        style: dashed
+          ? { width: '14px', height: '8px', borderRadius: '2px', border: `1.5px dashed ${color}` }
+          : isDot
+            ? { width: '8px', height: '8px', borderRadius: '999px', backgroundColor: color }
+            : { width: '14px', height: '8px', borderRadius: '2px', backgroundColor: color }
+      }),
+      jsx('span', { children: label })
+    ]
+  })
   return jsxs('div', {
     className: 'flex flex-wrap items-center gap-3 pt-2 border-t border-(--ui-stroke-tertiary)/50 shrink-0 mt-auto select-none',
     children: [
-      item('ready', '#60a5fa', 'Ready'),
+      item('ready', '#4d9fff', 'Ready'),
       item('running', '#34d399', 'Running'),
-      item('review', '#fbbf24', 'Review'),
-      item('blocked', '#f87171', 'Blocked'),
+      item('review', '#f472b6', 'Review'),
+      item('blocked', '#e0a13a', 'Blocked'),
       item('scheduled', '#a78bfa', 'Scheduled'),
       item('todo', 'var(--ui-text-secondary)', 'Todo'),
       item('triage', 'var(--ui-text-tertiary)', 'Triage'),
@@ -737,6 +721,19 @@ function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }
             style: { backgroundColor: STATUS_META.done.tone, opacity: showDone ? 1 : 0.3 }
           }),
           jsx('span', { children: doneLabel })
+        ]
+      }),
+      // Segment legend (non-interactive) — one hue per segment meaning.
+      jsxs('div', {
+        className: 'w-full flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[10px] text-(--ui-text-tertiary)',
+        children: [
+          jsx('span', { className: 'font-semibold uppercase text-(--ui-text-quaternary)', children: i18n.legSeg }),
+          segLegend(SEG_TONE.wait, i18n.legSegWait, true),
+          segLegend(SEG_TONE.blocked, i18n.legSegWaitBlocked, true),
+          segLegend(SEG_TONE.run, i18n.legSegRun, false),
+          segLegend(SEG_TONE.fail, i18n.legSegFail, false),
+          segLegend(SEG_TONE.live, i18n.legSegLive, false),
+          segLegend(SEG_TONE.run, i18n.legSegDot, false, true)
         ]
       })
     ]
@@ -855,15 +852,26 @@ const GANTT_LOCALES = {
     tasksHeader: 'Tasks',
     selectAll: 'Select all',
     clickForDetail: 'click for details',
-    tipDone: 'done (real run)',
+    tipWaited: d => `waited ${d}`,
+    tipWaitingFor: d => `waiting (${d} so far)`,
+    tipBlockedWait: d => `blocked (waiting ${d})`,
+    tipRun: d => `ran ${d}`,
+    tipFailRun: d => `failed run (${d})`,
+    tipRunningFor: d => `running (${d} so far)`,
     tipDoneUnknown: 'done (unknown duration)',
     tipDoneRan: d => `done (ran ${d})`,
     unitDay: 'd',
     unitHour: 'h',
     unitMin: 'm',
     unitSec: 's',
-    tipRunning: 'in progress',
-    tipTodo: 'not started',
+    legStatus: 'Status',
+    legSeg: 'Segments',
+    legSegWait: 'Waiting',
+    legSegWaitBlocked: 'Blocked wait',
+    legSegRun: 'Run',
+    legSegFail: 'Failed run',
+    legSegLive: 'Running',
+    legSegDot: 'Instant',
     tipSelect: name => `Select ${name}`,
     tipBlocked: 'Blocked task',
     tipBoard: board => `Board: ${board}`,
@@ -963,15 +971,26 @@ const GANTT_LOCALES = {
     tasksHeader: '任务',
     selectAll: '全选',
     clickForDetail: '点击查看详情',
-    tipDone: '已完成（真实运行时长）',
+    tipWaited: d => `等待 ${d}`,
+    tipWaitingFor: d => `等待中（已等待 ${d}）`,
+    tipBlockedWait: d => `阻塞中（已等待 ${d}）`,
+    tipRun: d => `运行 ${d}`,
+    tipFailRun: d => `失败运行（${d}）`,
+    tipRunningFor: d => `运行中（已运行 ${d}）`,
     tipDoneUnknown: '已完成（时长未知）',
     tipDoneRan: d => `已完成（实际运行 ${d}）`,
     unitDay: '天',
     unitHour: '小时',
     unitMin: '分',
     unitSec: '秒',
-    tipRunning: '进行中',
-    tipTodo: '未开始',
+    legStatus: '状态',
+    legSeg: '段',
+    legSegWait: '等待',
+    legSegWaitBlocked: '阻塞等待',
+    legSegRun: '运行段',
+    legSegFail: '失败运行',
+    legSegLive: '运行中',
+    legSegDot: '极短',
     tipSelect: name => `选择 ${name}`,
     tipBlocked: '已阻塞任务',
     tipBoard: board => `看板：${board}`,
@@ -1025,17 +1044,18 @@ function useGanttI18n() {
 
 /* ─────────────────────────── task drawer (read+write) ─────────────────────── */
 
-// Status tone — EXACTLY the official Kanban plugin's COLUMN_META tones
-// (apps/desktop/src/plugins/kanban/types.ts) so both plugins read alike.
+// Status tone — DIVERGED from the official kanban column colors on purpose
+// (v0.1.3 palette: red = failure only, amber = blocked only, green = live
+// only, pink = review, blue = ready, slate = done) for timeline readability.
 const STATUS_META = {
   triage:    { tone: 'var(--ui-text-tertiary)', label: 'Triage' },
   todo:      { tone: 'var(--ui-text-secondary)', label: 'Todo' },
   scheduled: { tone: '#a78bfa', label: 'Scheduled' },
-  ready:     { tone: '#60a5fa', label: 'Ready' },
+  ready:     { tone: '#4d9fff', label: 'Ready' },
   running:   { tone: '#34d399', label: 'Running' },
-  blocked:   { tone: '#f87171', label: 'Blocked' },
-  review:    { tone: '#fbbf24', label: 'Review' },
-  done:      { tone: 'var(--ui-text-tertiary)', label: 'Done' },
+  blocked:   { tone: '#e0a13a', label: 'Blocked' },
+  review:    { tone: '#f472b6', label: 'Review' },
+  done:      { tone: '#7c8798', label: 'Done' },
   archived:  { tone: 'var(--ui-text-quaternary)', label: 'Archived' }
 }
 const STATUS_ORDER = ['triage', 'todo', 'ready', 'blocked', 'running', 'review', 'done']
@@ -1838,7 +1858,7 @@ export function KanbanGanttPage() {
       visible = visible.filter(t => t.assignee && selectedAssignees.has(t.assignee))
     }
     visible = visible.filter(t => matchesSearch(t, search))
-    const rows = buildRows(visible)
+    const rows = buildRows(visible, nowSec)
     const allAssignees = Array.from(new Set(data.tasks.map(t => t.assignee).filter(Boolean))).sort()
     return { rows, domain, total: visible.length, tasks: visible, allAssignees }
   }, [data, disabledStatuses, selectedAssignees, search, showDone, win])

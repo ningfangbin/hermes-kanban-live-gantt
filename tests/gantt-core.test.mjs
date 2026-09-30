@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  DAY, MIN_BAR, statusTone,
-  barRange, taskBars, shortId, matchesSearch, buildRows,
+  DAY, SEG_TONE, statusTone,
+  taskSegments, taskRecency, shortId, matchesSearch, buildRows,
   isActive, localDayStart, dayStartsBetween, computeRollingDomain, daySegments, taskVisible, barInWindow, hourTickPlan,
   slideWindow, slideWindowByPixels, resizeWindow, MIN_WINDOW, WINDOW_BACK, WINDOW_AHEAD,
   splitDuration } from '../desktop/gantt-core.js'
@@ -88,16 +88,22 @@ test('daySegments — rolling window splits into local days (partial ends kept)'
   for (let i = 1; i < rs.length; i++) assert.equal(rs[i].start, rs[i - 1].end)
 })
 
-test('taskVisible — done needs the toggle AND window activity; archived never', () => {
+test('taskVisible — window-consistent: any overlapping segment shows the row', () => {
   const { min, max } = computeRollingDomain(NOW)
-  const active = { id: 't_a', status: 'running', created_at: NOW - 600 }
-  assert.equal(taskVisible(active, false, NOW, min, max), true)
+  // running task: its live run span reaches "now" → visible
+  assert.equal(taskVisible({ id: 't_a', status: 'running', created_at: NOW - 600 }, false, NOW, min, max), true)
+  // old todo (created days ago, never run): the waiting span is clipped into
+  // the window and renders as a dashed bar → visible
+  const oldTodo = { id: 't_o', status: 'todo', created_at: NOW - 5 * DAY }
+  assert.equal(taskVisible(oldTodo, false, NOW, min, max), true)
+  // …but gone once the window no longer touches its waiting span (future-only)
+  assert.equal(taskVisible(oldTodo, false, NOW, NOW + 3600, NOW + 5 * 3600), false)
   const doneOld = { id: 't_d1', status: 'done', completed_at: NOW - 5 * DAY }
   const doneNow = { id: 't_d2', status: 'done', completed_at: NOW - 3600 }
-  // default: hidden
+  // done: hidden without the toggle …
   assert.equal(taskVisible(doneOld, false, NOW, min, max), false)
   assert.equal(taskVisible(doneNow, false, NOW, min, max), false)
-  // toggle on: only the one with activity inside the window
+  // … toggle on: only the one with activity inside the window
   assert.equal(taskVisible(doneOld, true, NOW, min, max), false)
   assert.equal(taskVisible(doneNow, true, NOW, min, max), true)
   // archived never returns, even with the toggle on
@@ -125,70 +131,117 @@ test('barInWindow — bars outside the window are not drawn', () => {
   assert.equal(barInWindow({ t0: min - 3 * DAY, t1: min - 60 }, min, max), false) // entirely before
   assert.equal(barInWindow({ t0: max + 60, t1: max + 3600 }, min, max), false) // entirely after
   assert.equal(barInWindow({ t0: min - 10, t1: min }, min, max), false) // touching left edge
+  // zero-width spans (instant markers) count while inside the window
+  assert.equal(barInWindow({ t0: min + 60, t1: min + 60 }, min, max), true)
+  assert.equal(barInWindow({ t0: min - 60, t1: min - 60 }, min, max), false)
   assert.equal(barInWindow(null, min, max), false)
 })
 
-test('barRange / taskBars — open task created before the window has no bar inside it', () => {
-  const min = localDayStart(NOW)
-  const max = min + 3 * DAY
-  const oldTodo = { id: 't_old', status: 'todo', created_at: min - 3 * DAY }
-  const bars = taskBars(oldTodo, NOW)
-  assert.equal(bars.length, 1)
-  assert.equal(barInWindow(bars[0], min, max), false) // the row shows "—"
-  const todayTodo = { id: 't_new', status: 'todo', created_at: min + 600 }
-  assert.equal(barInWindow(taskBars(todayTodo, NOW)[0], min, max), true)
-})
-
-test('taskBars — running task bar extends to now; multi-run tasks yield one bar per run', () => {
-  const running = { id: 't_r', status: 'running', created_at: NOW - 3600, started_at: NOW - 3600 }
-  const [bar] = taskBars(running, NOW)
-  assert.equal(bar.kind, 'progress')
-  assert.ok(bar.t1 >= NOW)
-
+test('taskSegments — wait/run chain: exact spans, ends at now, fail & blocked tones', () => {
+  // multi-run running task: wait → failed run → wait → live run (ends at NOW)
   const multi = {
-    id: 't_m', status: 'running',
+    id: 't_m', status: 'running', created_at: NOW - 10800,
     runs: [
       { id: 1, started_at: NOW - 7200, ended_at: NOW - 7000, outcome: 'rate_limited' },
       { id: 2, started_at: NOW - 3600, ended_at: null, status: 'running' }
     ]
   }
-  const bars = taskBars(multi, NOW)
-  assert.equal(bars.length, 2)
-  assert.equal(bars[1].kind, 'progress')
-  assert.ok(bars[1].t1 >= NOW)
+  assert.deepEqual(
+    taskSegments(multi, NOW).map(s => [s.kind, s.tone, s.t0, s.t1]),
+    [
+      ['wait', 'wait', NOW - 10800, NOW - 7200],
+      ['run', 'fail', NOW - 7200, NOW - 7000],
+      ['wait', 'wait', NOW - 7000, NOW - 3600],
+      ['run', 'live', NOW - 3600, NOW]
+    ]
+  )
+  assert.ok(taskSegments(multi, NOW).every(s => s.t1 <= NOW), 'no segment extends past "now"')
+
+  // a short finished run keeps its EXACT span — no 2 h stretching
+  const done = { id: 't_d', status: 'done', created_at: NOW - 10800, run_started_at: NOW - 7200, run_ended_at: NOW - 5400, completed_at: NOW - 5300 }
+  assert.deepEqual(
+    taskSegments(done, NOW).map(s => [s.kind, s.tone, s.t0, s.t1]),
+    [
+      ['wait', 'wait', NOW - 10800, NOW - 7200],
+      ['run', 'run', NOW - 7200, NOW - 5400]
+    ]
+  )
+
+  // still-open task after its last run: the waiting span continues to now
+  const idle = { id: 't_i', status: 'ready', created_at: NOW - 7200, run_started_at: NOW - 7200, run_ended_at: NOW - 3600 }
+  assert.deepEqual(taskSegments(idle, NOW).map(s => [s.kind, s.t1]), [['run', NOW - 3600], ['wait', NOW]])
+
+  // blocked: the trailing waiting span carries the blocked tone
+  const blocked = { id: 't_b', status: 'blocked', created_at: NOW - 7200, run_started_at: NOW - 7200, run_ended_at: NOW - 3600 }
+  const bsegs = taskSegments(blocked, NOW)
+  assert.equal(bsegs[bsegs.length - 1].tone, 'blocked')
+  assert.equal(bsegs[bsegs.length - 1].ongoing, true)
+
+  // hand-completed (no runs at all): waiting span + instant marker
+  const hand = { id: 't_h', status: 'done', created_at: NOW - 3600, completed_at: NOW - 600 }
+  assert.deepEqual(
+    taskSegments(hand, NOW).map(s => [s.kind, s.instant === true, s.t0, s.t1]),
+    [
+      ['wait', false, NOW - 3600, NOW - 600],
+      ['run', true, NOW - 600, NOW - 600]
+    ]
+  )
 })
 
-test('barRange — done with a real run uses the run window (min-bar clamped)', () => {
-  const done = { id: 't_d', status: 'done', run_started_at: NOW - 10800, run_ended_at: NOW - 3600, completed_at: NOW - 3500 }
-  const bar = barRange(done, NOW)
-  assert.equal(bar.kind, 'done')
-  assert.equal(bar.t0, NOW - 10800)
-  assert.equal(bar.t1, NOW - 3600)
-  // a short real run is stretched to the 2h minimum bar length
-  const shortRun = { id: 't_s', status: 'done', run_started_at: NOW - 7200, run_ended_at: NOW - 5400, completed_at: NOW - 5300 }
-  assert.equal(barRange(shortRun, NOW).t1, NOW - 7200 + 2 * 3600)
-  // unknown duration → minimal anchored bar
-  const hand = { id: 't_h', status: 'done', completed_at: NOW - 600 }
-  assert.equal(barRange(hand, NOW).kind, 'done-instant')
-})
-
-test('shortId / matchesSearch / statusTone / buildRows basics', () => {
+test('shortId / matchesSearch / statusTone basics', () => {
   assert.equal(shortId('t_abcdef123'), 'abcdef')
   assert.equal(matchesSearch({ title: 'Fix the parser' }, 'parser'), true)
   assert.equal(matchesSearch({ title: 'Fix the parser' }, 'nomatch'), false)
   assert.equal(matchesSearch({ title: 'x' }, ''), true)
+  // v0.1.3 palette: red = failure only, amber = blocked, green = live, pink = review
   assert.equal(statusTone('running'), '#34d399')
+  assert.equal(statusTone('blocked'), '#e0a13a')
+  assert.equal(statusTone('review'), '#f472b6')
+  assert.equal(statusTone('ready'), '#4d9fff')
+  assert.equal(statusTone('done'), '#7c8798')
   assert.equal(statusTone('unknown-status'), 'var(--ui-text-secondary)')
-
-  const rows = buildRows([
-    { id: 't_a', title: 'parent', children: ['t_b'] },
-    { id: 't_b', title: 'child', parents: ['t_a'] }
-  ])
-  assert.deepEqual(rows.map(r => [r.task.id, r.depth, r.isChild]), [['t_a', 0, false], ['t_b', 1, true]])
 })
 
-test('MIN_BAR sanity', () => {
-  assert.equal(MIN_BAR, 2 * 3600)
+test('buildRows — siblings ordered by recency desc; children stay under parents', () => {
+  const tasks = [
+    { id: 't_old', title: 'old', created_at: NOW - 5 * DAY },
+    { id: 't_new', title: 'new', created_at: NOW - 60 },
+    { id: 't_p', title: 'parent', created_at: NOW - 10 * DAY, children: ['t_c_old', 't_c_run'] },
+    { id: 't_c_run', title: 'child running', status: 'running', created_at: NOW - DAY, parents: ['t_p'] },
+    { id: 't_c_old', title: 'child old', created_at: NOW - 9 * DAY, parents: ['t_p'] }
+  ]
+  const rows = buildRows(tasks, NOW)
+  assert.deepEqual(rows.map(r => [r.task.id, r.depth]), [
+    ['t_p', 0], ['t_c_run', 1], ['t_c_old', 1],   // parent floats up via its running child
+    ['t_new', 0], ['t_old', 0]
+  ])
+  // basics unchanged: a plain parent/child pair stays nested
+  const flat = buildRows([
+    { id: 't_a', title: 'parent', children: ['t_b'] },
+    { id: 't_b', title: 'child', parents: ['t_a'] }
+  ], NOW)
+  assert.deepEqual(flat.map(r => [r.task.id, r.depth, r.isChild]), [['t_a', 0, false], ['t_b', 1, true]])
+  // a running root outranks everything else
+  const runFirst = buildRows([
+    { id: 'x1', title: 'waiting', created_at: NOW - 10 },
+    { id: 'x2', title: 'running', status: 'running', created_at: NOW - DAY }
+  ], NOW)
+  assert.deepEqual(runFirst.map(r => r.task.id), ['x2', 'x1'])
+})
+
+test('taskRecency — running now > last run > created (never-run)', () => {
+  assert.equal(taskRecency({ status: 'running', created_at: NOW - DAY }, NOW), NOW)
+  assert.equal(taskRecency({ status: 'ready', runs: [{ started_at: NOW - 7200, ended_at: NOW - 3600 }] }, NOW), NOW - 3600)
+  assert.equal(taskRecency({ status: 'todo', created_at: NOW - 7200 }, NOW), NOW - 7200)
+  assert.equal(taskRecency({ status: 'done', completed_at: NOW - 600 }, NOW), NOW - 600)
+})
+
+test('SEG_TONE sanity — one hue per segment meaning', () => {
+  assert.equal(SEG_TONE.wait, '#8a9099')
+  assert.equal(SEG_TONE.blocked, '#e0a13a')
+  assert.equal(SEG_TONE.run, '#5b8def')
+  assert.equal(SEG_TONE.fail, '#ef5350')
+  assert.equal(SEG_TONE.live, '#34d399')
   assert.equal(DAY, 86400)
 })
 

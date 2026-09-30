@@ -40,72 +40,98 @@ import { jsx, jsxs } from "react/jsx-runtime";
 
 // src/core/gantt-core.ts
 var DAY = 86400;
-var MIN_BAR = 2 * 3600;
 var STATUS_TONE = {
   triage: "var(--ui-text-tertiary)",
   todo: "var(--ui-text-secondary)",
   scheduled: "#a78bfa",
-  ready: "#60a5fa",
+  ready: "#4d9fff",
   running: "#34d399",
-  blocked: "#f87171",
-  review: "#fbbf24",
-  done: "var(--ui-text-tertiary)",
+  blocked: "#e0a13a",
+  review: "#f472b6",
+  done: "#7c8798",
   archived: "var(--ui-text-quaternary)"
+};
+var SEG_TONE = {
+  wait: "#8a9099",
+  // created→run / retry gaps (dashed)
+  blocked: "#e0a13a",
+  // waiting while the task is blocked (dashed, amber)
+  run: "#5b8def",
+  // finished run span (exact length)
+  fail: "#ef5350",
+  // failed run span (crashed/failed/timed_out/…)
+  live: "#34d399"
+  // currently running (ends at "now")
 };
 function statusTone(status) {
   return STATUS_TONE[status] || "var(--ui-text-secondary)";
 }
-function barRange(task, now, minBarSec) {
-  const min = minBarSec || MIN_BAR;
-  const rs = task.run_started_at;
-  const re = task.run_ended_at;
-  const realRun = rs != null && re != null && rs < re;
-  if (task.status === "done" || task.status === "archived") {
-    if (realRun) {
-      return { t0: rs, t1: Math.max(rs + min, re), kind: "done", tone: statusTone(task.status) };
+function taskSegments(task, nowSec) {
+  if (!task) return [];
+  const now = nowSec != null ? nowSec : Math.floor(Date.now() / 1e3);
+  const done = task.status === "done" || task.status === "archived";
+  const out = [];
+  const runsRaw = [];
+  if (Array.isArray(task.runs)) {
+    for (const r of task.runs) {
+      if (!r || r.started_at == null) continue;
+      runsRaw.push({ s: r.started_at, e: r.ended_at != null ? r.ended_at : null, id: r.id, outcome: r.outcome || r.status });
     }
-    const anchor = task.completed_at ?? task.created_at;
-    if (anchor == null) return null;
-    return { t0: anchor, t1: anchor + min, kind: "done-instant" };
+  } else if (task.run_started_at != null) {
+    runsRaw.push({ s: task.run_started_at, e: task.run_ended_at != null ? task.run_ended_at : null, id: null, outcome: null });
+  } else if (!done && task.started_at != null) {
+    runsRaw.push({ s: task.started_at, e: null, id: null, outcome: "running" });
   }
-  if (task.status === "running" || task.status === "review") {
-    const start = task.run_started_at ?? task.started_at ?? task.created_at ?? now;
-    return { t0: start, t1: Math.max(start + min, now), kind: "progress", tone: statusTone(task.status) };
-  }
-  if (task.started_at) {
-    return { t0: task.started_at, t1: now, kind: "progress", tone: statusTone(task.status) };
-  }
-  const c = task.created_at;
-  return c ? { t0: c, t1: c + min, kind: "todo", tone: statusTone(task.status) } : null;
-}
-function taskBars(task, now, minBarSec) {
-  const min = minBarSec || MIN_BAR;
-  const runs = Array.isArray(task.runs) ? task.runs : [];
-  const validRuns = runs.filter((r) => r && r.started_at != null);
-  if (validRuns.length > 1) {
-    const bars = [];
-    for (const r of validRuns) {
-      const s = r.started_at;
-      const e = r.ended_at;
-      const isOngoing = (e == null || r.status === "running") && (task.status === "running" || task.status === "review");
-      const t1 = isOngoing ? Math.max(s + min, now) : e != null ? Math.max(s + min, e) : s + min;
-      const isFailed = ["crashed", "failed", "timed_out", "gave_up", "blocked"].includes(r.outcome || r.status);
-      const tone = isOngoing ? statusTone("running") : isFailed ? statusTone("blocked") : statusTone(r.outcome === "completed" || r.status === "completed" || r.status === "done" ? "done" : "review");
-      bars.push({
-        t0: s,
-        t1,
-        kind: isOngoing ? "progress" : "done",
-        tone,
-        runId: r.id,
-        profile: r.profile,
-        outcome: r.outcome || r.status,
-        isOngoing
-      });
+  if (!runsRaw.length) {
+    if (done) {
+      const anchor = task.completed_at ?? task.created_at;
+      if (anchor != null) {
+        if (task.created_at != null && task.created_at < anchor) {
+          out.push({ kind: "wait", t0: task.created_at, t1: anchor, tone: "wait" });
+        }
+        out.push({ kind: "run", t0: anchor, t1: anchor, tone: "run", instant: true });
+      }
+    } else if (task.created_at != null && now > task.created_at) {
+      out.push({ kind: "wait", t0: task.created_at, t1: now, tone: task.status === "blocked" ? "blocked" : "wait", ongoing: true });
     }
-    return bars;
+    return out;
   }
-  const single = barRange(task, now, min);
-  return single ? [single] : [];
+  runsRaw.sort((a, b) => a.s - b.s || (a.e ?? now) - (b.e ?? now));
+  const runs = [];
+  for (const r of runsRaw) {
+    const open = r.e == null && !done;
+    const end = r.e != null ? r.e : open ? now : done ? null : now;
+    const prev = runs[runs.length - 1];
+    if (prev && r.s <= (prev.e ?? now)) {
+      if ((end ?? now) > (prev.e ?? now)) prev.e = end;
+      continue;
+    }
+    runs.push({ s: r.s, e: end, open, id: r.id, outcome: r.outcome });
+  }
+  let cursor = task.created_at != null ? task.created_at : runs[0].s;
+  for (const r of runs) {
+    if (r.s > cursor) out.push({ kind: "wait", t0: cursor, t1: r.s, tone: "wait" });
+    let end = r.e;
+    if (end == null) {
+      end = done ? task.completed_at != null && task.completed_at > r.s ? task.completed_at : r.s : now;
+    }
+    const failed = ["crashed", "failed", "timed_out", "gave_up", "blocked", "rate_limited"].includes(r.outcome);
+    const live = r.open === true;
+    out.push({
+      kind: "run",
+      t0: r.s,
+      t1: end,
+      tone: live ? "live" : failed ? "fail" : "run",
+      ongoing: live,
+      runId: r.id,
+      outcome: r.outcome
+    });
+    if (end > cursor) cursor = end;
+  }
+  if (!done && cursor < now) {
+    out.push({ kind: "wait", t0: cursor, t1: now, tone: task.status === "blocked" ? "blocked" : "wait", ongoing: true });
+  }
+  return out;
 }
 function shortId(id) {
   return (id || "").replace(/^t_/, "").slice(0, 6);
@@ -117,7 +143,25 @@ function matchesSearch(task, query) {
   const title = (task.title || "").toLowerCase();
   return label.includes(q) || title.includes(q);
 }
-function buildRows(tasks) {
+function taskRecency(task, nowSec) {
+  const now = nowSec != null ? nowSec : Math.floor(Date.now() / 1e3);
+  if (!task) return 0;
+  if (task.status === "running") return now;
+  let last = null;
+  if (Array.isArray(task.runs)) {
+    for (const r of task.runs) {
+      if (!r || r.started_at == null) continue;
+      const e = r.ended_at != null ? r.ended_at : r.started_at;
+      if (last == null || e > last) last = e;
+    }
+  }
+  if (last == null && task.run_ended_at != null) last = task.run_ended_at;
+  if (last == null && task.run_started_at != null) last = task.run_started_at;
+  if (last == null && task.status === "done" && task.completed_at != null) last = task.completed_at;
+  if (last == null) last = task.created_at ?? 0;
+  return last;
+}
+function buildRows(tasks, nowSec) {
   const set = new Set(tasks.map((t) => t.id));
   const byId = {};
   for (const t of tasks) byId[t.id] = t;
@@ -127,7 +171,22 @@ function buildRows(tasks) {
   for (const t of tasks) {
     for (const p of t.parents || []) if (set.has(p)) hasParent.add(t.id);
   }
-  const roots = tasks.filter((t) => !hasParent.has(t.id));
+  const key = /* @__PURE__ */ new Map();
+  const inFlight = /* @__PURE__ */ new Set();
+  const subtreeKey = (id) => {
+    if (key.has(id)) return key.get(id);
+    if (inFlight.has(id)) return 0;
+    inFlight.add(id);
+    const t = byId[id];
+    let k = t ? taskRecency(t, nowSec) : 0;
+    for (const c of adj.get(id) || []) k = Math.max(k, subtreeKey(c));
+    inFlight.delete(id);
+    key.set(id, k);
+    return k;
+  };
+  const byRecency = (a, b) => subtreeKey(b) - subtreeKey(a);
+  const roots = tasks.filter((t) => !hasParent.has(t.id)).sort((x, y) => byRecency(x.id, y.id));
+  for (const id of adj.keys()) adj.get(id).sort(byRecency);
   const rows = [];
   const visited = /* @__PURE__ */ new Set();
   const walk = (id, depth, isChild) => {
@@ -186,12 +245,14 @@ function daySegments(min, max) {
   return out;
 }
 function taskVisible(task, showDone, nowSec, min, max) {
-  if (isActive(task)) return true;
-  if (!showDone || !task || task.status !== "done" || task.archived) return false;
-  return taskBars(task, nowSec).some((b) => barInWindow(b, min, max));
+  if (!task || task.archived || task.status === "archived") return false;
+  if (!isActive(task) && !showDone) return false;
+  return taskSegments(task, nowSec).some((s) => barInWindow(s, min, max));
 }
 function barInWindow(bar, min, max) {
-  return !!bar && bar.t1 != null && bar.t1 > min && bar.t0 < max;
+  if (!bar || bar.t1 == null) return false;
+  if (bar.t0 === bar.t1) return bar.t0 >= min && bar.t0 <= max;
+  return bar.t1 > min && bar.t0 < max;
 }
 function hourTickPlan(min, max, pxPerSec) {
   const hourPx = pxPerSec * 3600;
@@ -226,7 +287,6 @@ var ID = "kanban-live-gantt";
 var LABEL_W = 300;
 var ROW_H = 28;
 var BAR_H = 14;
-var MIN_BAR_SEC = 2 * 3600;
 var ZOOM_MAX_PX_PER_HOUR = 240;
 var rest = null;
 var storage = null;
@@ -405,19 +465,6 @@ function Ruler({ min, max, pxPerSec, now, onResetView, onWindow }) {
     ]
   });
 }
-function rawRunSeconds(task, bar) {
-  if (bar.runId != null && Array.isArray(task.runs)) {
-    const r = task.runs.find((x) => x && x.id === bar.runId);
-    if (r && r.started_at != null && r.ended_at != null && r.ended_at > r.started_at) {
-      return r.ended_at - r.started_at;
-    }
-  }
-  const rs = task.run_started_at;
-  const re = task.run_ended_at;
-  if (rs != null && re != null && re > rs) return re - rs;
-  const span = (bar.t1 ?? bar.t0) - bar.t0;
-  return span > 0 ? span : null;
-}
 function formatDuration(sec, i18n) {
   const p = splitDuration(sec);
   const all = [[p.d, i18n.unitDay], [p.h, i18n.unitHour], [p.m, i18n.unitMin], [p.s, i18n.unitSec]];
@@ -430,58 +477,46 @@ function formatDuration(sec, i18n) {
   }
   return parts.join("");
 }
-function Bar({ task, bar, pxPerSec, min, max, onOpen }) {
+function Segment({ task, seg, pxPerSec, min, max, onOpen }) {
   const i18n = useGanttI18n();
-  const start = Math.max(bar.t0, min);
-  const end = Math.min(bar.t1 ?? bar.t0, max);
+  const start = Math.max(seg.t0, min);
+  const end = Math.min(seg.t1, max);
   const left = Math.round((start - min) * pxPerSec);
+  const rawW = Math.max(0, (end - start) * pxPerSec);
+  const width = Math.max(Math.round(rawW), 3);
   const top = Math.round((ROW_H - BAR_H) / 2);
-  const tone = bar.tone || statusTone(task.status);
-  const style = { top: `${top}px`, height: `${BAR_H}px`, left: `${left}px`, cursor: "pointer" };
+  const style = { top: `${top}px`, height: `${BAR_H}px`, left: `${left}px`, width: `${width}px`, cursor: "pointer" };
+  const isWait = seg.kind === "wait";
+  const isInstant = seg.instant === true;
+  const dur = formatDuration(seg.t1 - seg.t0, i18n);
   let title = task.title;
-  if (bar.kind === "done") {
-    style.background = tone === "var(--ui-text-tertiary)" ? "#60a5fa" : tone;
-    style.opacity = "0.85";
-    const ranSec = rawRunSeconds(task, bar);
-    title = `${task.title} · ${ranSec != null ? i18n.tipDoneRan(formatDuration(ranSec, i18n)) : i18n.tipDone}`;
-  } else if (bar.kind === "done-instant") {
-    style.background = tone === "var(--ui-text-tertiary)" ? "#60a5fa" : tone;
+  if (isInstant) {
+    style.background = SEG_TONE.run;
     style.opacity = "0.55";
-    style.width = style.width || "4px";
     style.borderRadius = "999px";
     title = `${task.title} · ${i18n.tipDoneUnknown}`;
-  } else if (bar.kind === "progress") {
-    style.background = `color-mix(in srgb, ${tone} 22%, transparent)`;
-    style.border = `1px solid ${tone}`;
-    title = `${task.title} · ${i18n.tipRunning}`;
-  } else {
-    style.border = `1px dashed ${tone}`;
+  } else if (isWait) {
     style.background = "transparent";
-    title = `${task.title} · ${i18n.tipTodo}`;
+    style.border = `1.5px dashed ${seg.tone === "blocked" ? SEG_TONE.blocked : SEG_TONE.wait}`;
+    style.opacity = seg.tone === "blocked" ? "0.95" : "0.8";
+    title = `${task.title} · ${seg.tone === "blocked" ? i18n.tipBlockedWait(dur) : seg.ongoing ? i18n.tipWaitingFor(dur) : i18n.tipWaited(dur)}`;
+  } else if (seg.tone === "live") {
+    style.background = SEG_TONE.live;
+    style.boxShadow = `0 0 0 1px color-mix(in srgb, ${SEG_TONE.live} 65%, transparent), 0 0 9px color-mix(in srgb, ${SEG_TONE.live} 40%, transparent)`;
+    title = `${task.title} · ${i18n.tipRunningFor(dur)}`;
+  } else if (seg.tone === "fail") {
+    style.background = SEG_TONE.fail;
+    style.opacity = "0.95";
+    title = `${task.title} · ${i18n.tipFailRun(dur)}`;
+  } else {
+    style.background = SEG_TONE.run;
+    style.opacity = "0.92";
+    title = `${task.title} · ${task.status === "done" ? i18n.tipDoneRan(dur) : i18n.tipRun(dur)}`;
   }
-  style.width = `${Math.max(Math.round((end - start) * pxPerSec), 2)}px`;
-  const children = [];
-  if (bar.kind === "progress") {
-    children.push(jsx("div", {
-      className: "absolute rounded-sm",
-      style: {
-        left: 0,
-        top: 0,
-        bottom: 0,
-        width: "100%",
-        background: tone,
-        opacity: 0.75
-      }
-    }));
-    if (task.status === "running") {
-      children.push(jsx("div", { className: "kg-arc", style: { "--kanban-tone": tone } }));
-    }
-  }
+  if (!isInstant && rawW < 3) style.borderRadius = "999px";
+  const cls = "absolute rounded-sm kg-bar hover:brightness-110 transition-all " + (isInstant ? "kg-dot" : isWait ? "kg-wait" : seg.tone === "live" ? "kg-live" : seg.tone === "fail" ? "kg-fail" : "kg-run");
   const onClick = onOpen ? () => onOpen(task.id) : void 0;
-  if (bar.kind === "done" || bar.kind === "done-instant") {
-    return jsx("div", { className: "absolute rounded-sm kg-bar hover:brightness-110 transition-all", style, title, onClick });
-  }
-  return jsxs("div", { className: "absolute rounded-sm kg-bar hover:brightness-110 transition-all", style, title, onClick, children });
+  return jsx("div", { className: cls, style, title, onClick });
 }
 function cleanTitle(title, label, untitled) {
   if (!title) return untitled || "(untitled)";
@@ -541,7 +576,7 @@ function ResizeHandle({ get, set, min, max, resetTo, storageKey, growDirection =
 function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onOpen, isSelected, isChecked, onToggleCheck, isEven, showBoardBadge }) {
   const i18n = useGanttI18n();
   const labelW = useValue($labelW);
-  const bars = taskBars(task, now).filter((b) => barInWindow(b, min, max));
+  const segs = taskSegments(task, now).filter((s) => barInWindow(s, min, max));
   const label = task.label ? `[${task.label}]` : "";
   const name = cleanTitle(task.title, task.label, i18n.untitled);
   const isBlocked = task.status === "blocked";
@@ -560,7 +595,7 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
       borderBottom: "1px solid var(--ui-stroke-secondary)"
     }
   }) : null;
-  const dotColor = (bars.length > 0 ? bars[bars.length - 1]?.tone : null) || statusTone(task.status);
+  const dotColor = statusTone(task.status);
   return jsxs("div", {
     className: cn(
       "group grid items-center border-b border-(--ui-stroke-tertiary)/40 transition-colors cursor-pointer",
@@ -602,7 +637,7 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
             "aria-label": i18n.tipSelect(name)
           }),
           isBlocked ? jsx("span", {
-            className: "inline-flex items-center justify-center shrink-0 text-[#f87171]",
+            className: "inline-flex items-center justify-center shrink-0 text-[#e0a13a]",
             title: i18n.tipBlocked,
             children: jsx(Codicon, { name: "warning", size: "0.85rem" })
           }) : jsx("span", { className: "h-1.5 w-1.5 rounded-full shrink-0 self-center ml-0.5", style: { backgroundColor: dotColor } }),
@@ -630,7 +665,7 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
       jsxs("div", {
         className: "relative overflow-hidden",
         style: { height: `${ROW_H}px` },
-        children: bars.length > 0 ? bars.map((b, idx) => jsx(Bar, { key: b.runId || idx, task, bar: b, pxPerSec, min, max, onOpen })) : [jsx("div", { key: "empty", className: "text-(--ui-text-quaternary) text-[10px]", children: "—" })]
+        children: segs.length > 0 ? segs.map((s, idx) => jsx(Segment, { key: s.runId != null ? `run-${s.runId}` : `${s.kind}-${s.t0}-${idx}`, task, seg: s, pxPerSec, min, max, onOpen })) : [jsx("div", { key: "empty", className: "text-(--ui-text-quaternary) text-[10px]", children: "—" })]
       })
     ]
   });
@@ -762,13 +797,23 @@ function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }
     });
   };
   const doneLabel = i18n.col?.done || STATUS_META.done.label;
+  const segLegend = (color, label, dashed, isDot) => jsxs("span", {
+    className: "inline-flex items-center gap-1.5",
+    children: [
+      jsx("span", {
+        className: "shrink-0",
+        style: dashed ? { width: "14px", height: "8px", borderRadius: "2px", border: `1.5px dashed ${color}` } : isDot ? { width: "8px", height: "8px", borderRadius: "999px", backgroundColor: color } : { width: "14px", height: "8px", borderRadius: "2px", backgroundColor: color }
+      }),
+      jsx("span", { children: label })
+    ]
+  });
   return jsxs("div", {
     className: "flex flex-wrap items-center gap-3 pt-2 border-t border-(--ui-stroke-tertiary)/50 shrink-0 mt-auto select-none",
     children: [
-      item("ready", "#60a5fa", "Ready"),
+      item("ready", "#4d9fff", "Ready"),
       item("running", "#34d399", "Running"),
-      item("review", "#fbbf24", "Review"),
-      item("blocked", "#f87171", "Blocked"),
+      item("review", "#f472b6", "Review"),
+      item("blocked", "#e0a13a", "Blocked"),
       item("scheduled", "#a78bfa", "Scheduled"),
       item("todo", "var(--ui-text-secondary)", "Todo"),
       item("triage", "var(--ui-text-tertiary)", "Triage"),
@@ -786,6 +831,19 @@ function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }
             style: { backgroundColor: STATUS_META.done.tone, opacity: showDone ? 1 : 0.3 }
           }),
           jsx("span", { children: doneLabel })
+        ]
+      }),
+      // Segment legend (non-interactive) — one hue per segment meaning.
+      jsxs("div", {
+        className: "w-full flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[10px] text-(--ui-text-tertiary)",
+        children: [
+          jsx("span", { className: "font-semibold uppercase text-(--ui-text-quaternary)", children: i18n.legSeg }),
+          segLegend(SEG_TONE.wait, i18n.legSegWait, true),
+          segLegend(SEG_TONE.blocked, i18n.legSegWaitBlocked, true),
+          segLegend(SEG_TONE.run, i18n.legSegRun, false),
+          segLegend(SEG_TONE.fail, i18n.legSegFail, false),
+          segLegend(SEG_TONE.live, i18n.legSegLive, false),
+          segLegend(SEG_TONE.run, i18n.legSegDot, false, true)
         ]
       })
     ]
@@ -898,15 +956,26 @@ var GANTT_LOCALES = {
     tasksHeader: "Tasks",
     selectAll: "Select all",
     clickForDetail: "click for details",
-    tipDone: "done (real run)",
+    tipWaited: (d) => `waited ${d}`,
+    tipWaitingFor: (d) => `waiting (${d} so far)`,
+    tipBlockedWait: (d) => `blocked (waiting ${d})`,
+    tipRun: (d) => `ran ${d}`,
+    tipFailRun: (d) => `failed run (${d})`,
+    tipRunningFor: (d) => `running (${d} so far)`,
     tipDoneUnknown: "done (unknown duration)",
     tipDoneRan: (d) => `done (ran ${d})`,
     unitDay: "d",
     unitHour: "h",
     unitMin: "m",
     unitSec: "s",
-    tipRunning: "in progress",
-    tipTodo: "not started",
+    legStatus: "Status",
+    legSeg: "Segments",
+    legSegWait: "Waiting",
+    legSegWaitBlocked: "Blocked wait",
+    legSegRun: "Run",
+    legSegFail: "Failed run",
+    legSegLive: "Running",
+    legSegDot: "Instant",
     tipSelect: (name) => `Select ${name}`,
     tipBlocked: "Blocked task",
     tipBoard: (board) => `Board: ${board}`,
@@ -1006,15 +1075,26 @@ var GANTT_LOCALES = {
     tasksHeader: "任务",
     selectAll: "全选",
     clickForDetail: "点击查看详情",
-    tipDone: "已完成（真实运行时长）",
+    tipWaited: (d) => `等待 ${d}`,
+    tipWaitingFor: (d) => `等待中（已等待 ${d}）`,
+    tipBlockedWait: (d) => `阻塞中（已等待 ${d}）`,
+    tipRun: (d) => `运行 ${d}`,
+    tipFailRun: (d) => `失败运行（${d}）`,
+    tipRunningFor: (d) => `运行中（已运行 ${d}）`,
     tipDoneUnknown: "已完成（时长未知）",
     tipDoneRan: (d) => `已完成（实际运行 ${d}）`,
     unitDay: "天",
     unitHour: "小时",
     unitMin: "分",
     unitSec: "秒",
-    tipRunning: "进行中",
-    tipTodo: "未开始",
+    legStatus: "状态",
+    legSeg: "段",
+    legSegWait: "等待",
+    legSegWaitBlocked: "阻塞等待",
+    legSegRun: "运行段",
+    legSegFail: "失败运行",
+    legSegLive: "运行中",
+    legSegDot: "极短",
     tipSelect: (name) => `选择 ${name}`,
     tipBlocked: "已阻塞任务",
     tipBoard: (board) => `看板：${board}`,
@@ -1062,11 +1142,11 @@ var STATUS_META = {
   triage: { tone: "var(--ui-text-tertiary)", label: "Triage" },
   todo: { tone: "var(--ui-text-secondary)", label: "Todo" },
   scheduled: { tone: "#a78bfa", label: "Scheduled" },
-  ready: { tone: "#60a5fa", label: "Ready" },
+  ready: { tone: "#4d9fff", label: "Ready" },
   running: { tone: "#34d399", label: "Running" },
-  blocked: { tone: "#f87171", label: "Blocked" },
-  review: { tone: "#fbbf24", label: "Review" },
-  done: { tone: "var(--ui-text-tertiary)", label: "Done" },
+  blocked: { tone: "#e0a13a", label: "Blocked" },
+  review: { tone: "#f472b6", label: "Review" },
+  done: { tone: "#7c8798", label: "Done" },
   archived: { tone: "var(--ui-text-quaternary)", label: "Archived" }
 };
 var STATUS_ORDER = ["triage", "todo", "ready", "blocked", "running", "review", "done"];
@@ -1799,7 +1879,7 @@ function KanbanGanttPage() {
       visible = visible.filter((t) => t.assignee && selectedAssignees.has(t.assignee));
     }
     visible = visible.filter((t) => matchesSearch(t, search));
-    const rows2 = buildRows(visible);
+    const rows2 = buildRows(visible, nowSec);
     const allAssignees = Array.from(new Set(data.tasks.map((t) => t.assignee).filter(Boolean))).sort();
     return { rows: rows2, domain: domain2, total: visible.length, tasks: visible, allAssignees };
   }, [data, disabledStatuses, selectedAssignees, search, showDone, win]);

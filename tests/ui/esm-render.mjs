@@ -298,6 +298,10 @@ if (pageNode) {
   check(flat.includes('Todo created today'), 'page renders a todo created today')
   check(!flat.includes('DONE task must be hidden'), 'done task is filtered OUT of the live view')
   check(!flat.includes('ARCHIVED task must be hidden'), 'archived task is filtered OUT of the live view')
+  check(flat.includes('Todo created long ago'), 'old todo renders as a dashed waiting span (window-consistent rows)')
+  check(flat.includes('kg-wait'), 'waiting segments render (dashed)')
+  check(flat.includes('kg-live'), 'the running segment renders (live, ends at now)')
+  check(flat.indexOf('Running task (today)') < flat.indexOf('Todo created long ago'), 'rows ordered by recency (running first)')
   const hourLabels = flat.match(/\b\d{2}:00\b/g) || []
   check(hourLabels.length >= 3, 'zoomed render shows hour tick labels (' + hourLabels.slice(0, 4).join(' ') + ')')
   check(flat.includes('cursor-col-resize'), 'ruler renders the window end handles (drag to move start/end)')

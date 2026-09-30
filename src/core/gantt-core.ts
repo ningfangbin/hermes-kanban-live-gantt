@@ -1,97 +1,128 @@
 /** Pure timeline logic for the live Gantt view — forked from the kanban-gantt core
  * (https://github.com/e-is/hermes-kanban-gantt — (c) e-is, GPL-3.0; modified
- * 2026-09-29 by ningfangbin, same license). No React, no SDK: this module is
+ * 2026-09-29/30 by ningfangbin, same license). No React, no SDK: this module is
  * unit-testable as-is.
  *
  * Live view = a default 72 h window, now − 24h → now + 48h (local wall clock,
  * never a fixed day-count window). The window itself is slidable: the helpers
  * below move it as a whole (slideWindow) or one edge at a time (resizeWindow);
- * the UI re-anchors it to "now" on refresh until the user moves it. Open work
- * always shows; done tasks only when explicitly enabled AND they have activity
- * inside the window. */
+ * the UI re-anchors it to "now" on refresh until the user moves it.
+ *
+ * Rendering model (v0.1.3): every task is an alternating sequence of WAIT spans
+ * (created → first run, gaps between runs, last run → now while unfinished —
+ * dashed) and RUN spans (exact real durations, never stretched, never past
+ * now) — see taskSegments(). A row shows iff at least one of its segments
+ * overlaps the window. Rows are ordered by recency (running first), children
+ * kept under their parents — see buildRows(). */
 
 export const DAY = 86_400;
-export const MIN_BAR = 2 * 3600;
-// Official Kanban plugin status tones (COLUMN_META, types.ts) — unified style
+// Status tones — deliberately DIVERGED from the official kanban column colors
+// (kanban-gantt parity was dropped on purpose: the amber/red/blue clusters were
+// indistinguishable in the timeline). Semantics: red = failure only, amber =
+// blocked only, green = live only, pink = review, blue = ready, slate = done.
 const STATUS_TONE = {
   triage:   'var(--ui-text-tertiary)',
   todo:     'var(--ui-text-secondary)',
   scheduled:'#a78bfa',
-  ready:    '#60a5fa',
+  ready:    '#4d9fff',
   running:  '#34d399',
-  blocked:  '#f87171',
-  review:   '#fbbf24',
-  done:     'var(--ui-text-tertiary)',
+  blocked:  '#e0a13a',
+  review:   '#f472b6',
+  done:     '#7c8798',
   archived: 'var(--ui-text-quaternary)'
+};
+// Segment tones — one hue per segment MEANING (see taskSegments).
+export const SEG_TONE = {
+  wait:    '#8a9099', // created→run / retry gaps (dashed)
+  blocked: '#e0a13a', // waiting while the task is blocked (dashed, amber)
+  run:     '#5b8def', // finished run span (exact length)
+  fail:    '#ef5350', // failed run span (crashed/failed/timed_out/…)
+  live:    '#34d399'  // currently running (ends at "now")
 };
 export function statusTone(status) {
   return STATUS_TONE[status] || 'var(--ui-text-secondary)';
 }
-export function barRange(task, now, minBarSec) {
-  const min = minBarSec || MIN_BAR;
-  // Real execution window (a worker actually ran the task) — the truth for
-  // done durations. Hand-only completions carry run_started_at == null.
-  const rs = task.run_started_at;
-  const re = task.run_ended_at;
-  const realRun = rs != null && re != null && rs < re;
+/** The task's lifecycle as alternating WAIT / RUN segments (seconds).
+ *
+ *   wait — created → first run, gaps between runs, and (while unfinished)
+ *          last run end → now. `ongoing: true` marks the trailing wait.
+ *   run  — one per real run, EXACT span [started_at, ended_at]: never
+ *          stretched, never past now; `ongoing: true` while still running.
+ *          tone: 'run' | 'fail' (crashed/failed/timed_out/gave_up/blocked) |
+ *          'live' (still running). `instant: true` marks a hand-completed
+ *          task with no run record (zero-width marker at completed_at).
+ * Wait tone: 'blocked' while the task is currently blocked, else 'wait'.
+ * The renderer clips every segment to the window. */
+export function taskSegments(task, nowSec) {
+  if (!task) return [];
+  const now = nowSec != null ? nowSec : Math.floor(Date.now() / 1000);
+  const done = task.status === 'done' || task.status === 'archived';
+  const out = [];
 
-  if (task.status === 'done' || task.status === 'archived') {
-    if (realRun) {
-      return { t0: rs, t1: Math.max(rs + min, re), kind: 'done', tone: statusTone(task.status) };
+  // Real runs: the runs[] history when present, else the consolidated fields.
+  const runsRaw = [];
+  if (Array.isArray(task.runs)) {
+    for (const r of task.runs) {
+      if (!r || r.started_at == null) continue;
+      runsRaw.push({ s: r.started_at, e: r.ended_at != null ? r.ended_at : null, id: r.id, outcome: r.outcome || r.status });
     }
-    // no real run: unknown duration -> minimal bar anchored on completion
-    const anchor = task.completed_at ?? task.created_at;
-    if (anchor == null) return null;
-    return { t0: anchor, t1: anchor + min, kind: 'done-instant' };
+  } else if (task.run_started_at != null) {
+    runsRaw.push({ s: task.run_started_at, e: task.run_ended_at != null ? task.run_ended_at : null, id: null, outcome: null });
+  } else if (!done && task.started_at != null) {
+    runsRaw.push({ s: task.started_at, e: null, id: null, outcome: 'running' });
   }
-  if (task.status === 'running' || task.status === 'review') {
-    const start = task.run_started_at ?? task.started_at ?? task.created_at ?? now;
-    // ensure running bar always extends to at least now (and at least minBar)
-    return { t0: start, t1: Math.max(start + min, now), kind: 'progress', tone: statusTone(task.status) };
-  }
-  if (task.started_at) {
-    // claimed but unfinished (ready edge case) — run start is real
-    return { t0: task.started_at, t1: now, kind: 'progress', tone: statusTone(task.status) };
-  }
-  const c = task.created_at;
-  return c ? { t0: c, t1: c + min, kind: 'todo', tone: statusTone(task.status) } : null;
-}
-export function taskBars(task, now, minBarSec) {
-  const min = minBarSec || MIN_BAR;
-  // If the task carries a list of recorded runs with timestamps, create a bar for each real run
-  const runs = Array.isArray(task.runs) ? task.runs : [];
-  const validRuns = runs.filter(r => r && r.started_at != null);
 
-  if (validRuns.length > 1) {
-    const bars = [];
-    for (const r of validRuns) {
-      const s = r.started_at;
-      const e = r.ended_at;
-      const isOngoing = (e == null || r.status === 'running') && (task.status === 'running' || task.status === 'review');
-      const t1 = isOngoing ? Math.max(s + min, now) : (e != null ? Math.max(s + min, e) : s + min);
-      const isFailed = ['crashed', 'failed', 'timed_out', 'gave_up', 'blocked'].includes(r.outcome || r.status);
-      const tone = isOngoing
-        ? statusTone('running')
-        : isFailed
-          ? statusTone('blocked')
-          : statusTone(r.outcome === 'completed' || r.status === 'completed' || r.status === 'done' ? 'done' : 'review');
-      bars.push({
-        t0: s,
-        t1,
-        kind: isOngoing ? 'progress' : 'done',
-        tone,
-        runId: r.id,
-        profile: r.profile,
-        outcome: r.outcome || r.status,
-        isOngoing
-      });
+  if (!runsRaw.length) {
+    // No run records: hand-completed → wait span + instant marker; still-open
+    // → the waiting span runs from creation to now.
+    if (done) {
+      const anchor = task.completed_at ?? task.created_at;
+      if (anchor != null) {
+        if (task.created_at != null && task.created_at < anchor) {
+          out.push({ kind: 'wait', t0: task.created_at, t1: anchor, tone: 'wait' });
+        }
+        out.push({ kind: 'run', t0: anchor, t1: anchor, tone: 'run', instant: true });
+      }
+    } else if (task.created_at != null && now > task.created_at) {
+      out.push({ kind: 'wait', t0: task.created_at, t1: now, tone: task.status === 'blocked' ? 'blocked' : 'wait', ongoing: true });
     }
-    return bars;
+    return out;
   }
 
-  // Fallback to single consolidated bar
-  const single = barRange(task, now, min);
-  return single ? [single] : [];
+  // Sort by start; merge overlapping / touching spans (data noise, retries).
+  runsRaw.sort((a, b) => a.s - b.s || (a.e ?? now) - (b.e ?? now));
+  const runs = [];
+  for (const r of runsRaw) {
+    const open = r.e == null && !done; // still-running span (no end recorded)
+    const end = r.e != null ? r.e : (open ? now : (done ? null : now));
+    const prev = runs[runs.length - 1];
+    if (prev && r.s <= (prev.e ?? now)) {
+      if ((end ?? now) > (prev.e ?? now)) prev.e = end;
+      continue;
+    }
+    runs.push({ s: r.s, e: end, open, id: r.id, outcome: r.outcome });
+  }
+
+  let cursor = task.created_at != null ? task.created_at : runs[0].s;
+  for (const r of runs) {
+    if (r.s > cursor) out.push({ kind: 'wait', t0: cursor, t1: r.s, tone: 'wait' });
+    let end = r.e;
+    if (end == null) {
+      end = done ? (task.completed_at != null && task.completed_at > r.s ? task.completed_at : r.s) : now;
+    }
+    const failed = ['crashed', 'failed', 'timed_out', 'gave_up', 'blocked', 'rate_limited'].includes(r.outcome);
+    const live = r.open === true;
+    out.push({
+      kind: 'run', t0: r.s, t1: end,
+      tone: live ? 'live' : failed ? 'fail' : 'run',
+      ongoing: live, runId: r.id, outcome: r.outcome
+    });
+    if (end > cursor) cursor = end;
+  }
+  if (!done && cursor < now) {
+    out.push({ kind: 'wait', t0: cursor, t1: now, tone: task.status === 'blocked' ? 'blocked' : 'wait', ongoing: true });
+  }
+  return out;
 }
 export function shortId(id) {
   return (id || '').replace(/^t_/, '').slice(0, 6)
@@ -104,7 +135,32 @@ export function matchesSearch(task, query) {
   const title = (task.title || '').toLowerCase();
   return label.includes(q) || title.includes(q);
 }
-export function buildRows(tasks) {
+/** Recency key for row ordering: running → now; else the latest recorded run
+ *  activity; never-run → created; done without runs → completed. */
+export function taskRecency(task, nowSec) {
+  const now = nowSec != null ? nowSec : Math.floor(Date.now() / 1000);
+  if (!task) return 0;
+  if (task.status === 'running') return now;
+  let last = null;
+  if (Array.isArray(task.runs)) {
+    for (const r of task.runs) {
+      if (!r || r.started_at == null) continue;
+      const e = r.ended_at != null ? r.ended_at : r.started_at;
+      if (last == null || e > last) last = e;
+    }
+  }
+  if (last == null && task.run_ended_at != null) last = task.run_ended_at;
+  if (last == null && task.run_started_at != null) last = task.run_started_at;
+  if (last == null && task.status === 'done' && task.completed_at != null) last = task.completed_at;
+  if (last == null) last = task.created_at ?? 0;
+  return last;
+}
+
+/** Flatten tasks into parent→child rows; siblings ordered by recency DESC
+ *  (running / most recently active first) using each subtree's max recency,
+ *  so a parent whose child is running floats to the top with it. Children
+ *  stay nested under their parent. */
+export function buildRows(tasks, nowSec) {
   const set = new Set(tasks.map(t => t.id));
   const byId = {};
   for (const t of tasks) byId[t.id] = t;
@@ -114,7 +170,22 @@ export function buildRows(tasks) {
   for (const t of tasks) {
     for (const p of t.parents || []) if (set.has(p)) hasParent.add(t.id);
   }
-  const roots = tasks.filter(t => !hasParent.has(t.id));
+  const key = new Map();
+  const inFlight = new Set();
+  const subtreeKey = id => {
+    if (key.has(id)) return key.get(id);
+    if (inFlight.has(id)) return 0; // cycle guard
+    inFlight.add(id);
+    const t = byId[id];
+    let k = t ? taskRecency(t, nowSec) : 0;
+    for (const c of adj.get(id) || []) k = Math.max(k, subtreeKey(c));
+    inFlight.delete(id);
+    key.set(id, k);
+    return k;
+  };
+  const byRecency = (a, b) => subtreeKey(b) - subtreeKey(a);
+  const roots = tasks.filter(t => !hasParent.has(t.id)).sort((x, y) => byRecency(x.id, y.id));
+  for (const id of adj.keys()) adj.get(id).sort(byRecency);
   const rows = [];
   const visited = new Set();
   const walk = (id, depth, isChild) => {
@@ -128,8 +199,8 @@ export function buildRows(tasks) {
   return rows;
 }
 
-/* ─────────────────────────── day-view window ────────────────────────────────
-   Rolling [now − 24h, now + 24h] in the machine's local timezone. */
+/* ─────────────────────────── window helpers ─────────────────────────────────
+   Rolling 72 h window (now − 24h → now + 48h) in the machine's local timezone. */
 
 /** Open work? (done / archived are hidden by default — see taskVisible). */
 export function isActive(task) {
@@ -209,17 +280,21 @@ export function daySegments(min, max) {
   return out;
 }
 
-/** Day-view visibility: open work always; `done` tasks only when `showDone`
- *  is on AND they have activity inside the window. Archived never shows. */
+/** Window-consistent visibility: a task shows iff at least one of its
+ *  lifecycle segments overlaps the window; `done` additionally requires the
+ *  showDone toggle; archived never shows. */
 export function taskVisible(task, showDone, nowSec, min, max) {
-  if (isActive(task)) return true;
-  if (!showDone || !task || task.status !== 'done' || task.archived) return false;
-  return taskBars(task, nowSec).some(b => barInWindow(b, min, max));
+  if (!task || task.archived || task.status === 'archived') return false;
+  if (!isActive(task) && !showDone) return false;
+  return taskSegments(task, nowSec).some(s => barInWindow(s, min, max));
 }
 
-/** Does `bar` overlap the [min, max) window? (bars outside are not drawn) */
+/** Does the span overlap the [min, max] window? (outside spans are not drawn)
+ *  Zero-width spans — instant markers — count while inside the window. */
 export function barInWindow(bar, min, max) {
-  return !!bar && bar.t1 != null && bar.t1 > min && bar.t0 < max;
+  if (!bar || bar.t1 == null) return false;
+  if (bar.t0 === bar.t1) return bar.t0 >= min && bar.t0 <= max;
+  return bar.t1 > min && bar.t0 < max;
 }
 
 /** Hour tick plan for the live view (free zoom).
