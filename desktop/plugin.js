@@ -55,11 +55,11 @@ var SEG_TONE = {
   wait: "#8a9099",
   // created→run / retry gaps (dashed)
   blocked: "#e0a13a",
-  // waiting while the task is blocked (dashed, amber)
+  // blocked: waiting (dashed) or a run that ended blocked (solid)
   run: "#5b8def",
-  // finished run span (exact length)
+  // finished run span (exact length; incl. timed_out / rate_limited)
   fail: "#ef5350",
-  // failed run span (crashed/failed/timed_out/…)
+  // hard failure — crashed / failed / spawn_failed / gave_up
   live: "#34d399"
   // currently running (ends at "now")
 };
@@ -115,13 +115,13 @@ function taskSegments(task, nowSec) {
     if (end == null) {
       end = done ? task.completed_at != null && task.completed_at > r.s ? task.completed_at : r.s : now;
     }
-    const failed = ["crashed", "failed", "timed_out", "gave_up", "blocked", "rate_limited"].includes(r.outcome);
+    const failed = ["crashed", "failed", "spawn_failed", "gave_up"].includes(r.outcome);
     const live = r.open === true;
     out.push({
       kind: "run",
       t0: r.s,
       t1: end,
-      tone: live ? "live" : failed ? "fail" : "run",
+      tone: live ? "live" : failed ? "fail" : r.outcome === "blocked" ? "blocked" : "run",
       ongoing: live,
       runId: r.id,
       outcome: r.outcome
@@ -508,6 +508,10 @@ function Segment({ task, seg, pxPerSec, min, max, onOpen }) {
     style.background = SEG_TONE.fail;
     style.opacity = "0.95";
     title = `${task.title} · ${i18n.tipFailRun(dur)}`;
+  } else if (seg.tone === "blocked") {
+    style.background = SEG_TONE.blocked;
+    style.opacity = "0.9";
+    title = `${task.title} · ${i18n.tipRunBlocked(dur)}`;
   } else {
     style.background = SEG_TONE.run;
     style.opacity = "0.92";
@@ -840,6 +844,7 @@ function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }
           jsx("span", { className: "font-semibold uppercase text-(--ui-text-quaternary)", children: i18n.legSeg }),
           segLegend(SEG_TONE.wait, i18n.legSegWait, true),
           segLegend(SEG_TONE.blocked, i18n.legSegWaitBlocked, true),
+          segLegend(SEG_TONE.blocked, i18n.legSegBlockedRun, false),
           segLegend(SEG_TONE.run, i18n.legSegRun, false),
           segLegend(SEG_TONE.fail, i18n.legSegFail, false),
           segLegend(SEG_TONE.live, i18n.legSegLive, false),
@@ -961,6 +966,7 @@ var GANTT_LOCALES = {
     tipBlockedWait: (d) => `blocked (waiting ${d})`,
     tipRun: (d) => `ran ${d}`,
     tipFailRun: (d) => `failed run (${d})`,
+    tipRunBlocked: (d) => `ran ${d} · ended blocked (needs input)`,
     tipRunningFor: (d) => `running (${d} so far)`,
     tipDoneUnknown: "done (unknown duration)",
     tipDoneRan: (d) => `done (ran ${d})`,
@@ -972,6 +978,7 @@ var GANTT_LOCALES = {
     legSeg: "Segments",
     legSegWait: "Waiting",
     legSegWaitBlocked: "Blocked wait",
+    legSegBlockedRun: "Blocked (needs input)",
     legSegRun: "Run",
     legSegFail: "Failed run",
     legSegLive: "Running",
@@ -1080,6 +1087,7 @@ var GANTT_LOCALES = {
     tipBlockedWait: (d) => `阻塞中（已等待 ${d}）`,
     tipRun: (d) => `运行 ${d}`,
     tipFailRun: (d) => `失败运行（${d}）`,
+    tipRunBlocked: (d) => `运行 ${d} · 阻塞收尾（需人工）`,
     tipRunningFor: (d) => `运行中（已运行 ${d}）`,
     tipDoneUnknown: "已完成（时长未知）",
     tipDoneRan: (d) => `已完成（实际运行 ${d}）`,
@@ -1091,6 +1099,7 @@ var GANTT_LOCALES = {
     legSeg: "段",
     legSegWait: "等待",
     legSegWaitBlocked: "阻塞等待",
+    legSegBlockedRun: "阻塞收尾",
     legSegRun: "运行段",
     legSegFail: "失败运行",
     legSegLive: "运行中",

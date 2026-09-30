@@ -96,9 +96,11 @@ the window:
 - **Run spans — solid, exact**: `[started_at, ended_at]` at their real
   length — short runs are **never stretched** (below 3 px they collapse to a
   dot marker; zoom in for the exact width). A span still in progress ends at
-  *now* and glows green (`#34d399`); failed runs (`crashed`, `failed`,
-  `timed_out`, `gave_up`, `blocked`, `rate_limited`) are red (`#ef5350`);
-  finished runs are blue (`#5b8def`).
+  *now* and glows green (`#34d399`); **hard failures** (`crashed`, `failed`,
+  `spawn_failed`, `gave_up`) are red (`#ef5350`); a run that ended
+  **`blocked`** (awaiting human input) is amber (`#e0a13a`); everything else —
+  including `timed_out` and `rate_limited`, which are normal workflow events —
+  is the standard blue (`#5b8def`).
 - **Hand-completed tasks** (no run record) get a waiting span plus a small
   round marker at `completed_at` ("unknown duration").
 

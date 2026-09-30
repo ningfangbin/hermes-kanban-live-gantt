@@ -348,6 +348,11 @@ function Segment({ task, seg, pxPerSec, min, max, onOpen }) {
     style.background = SEG_TONE.fail
     style.opacity = '0.95'
     title = `${task.title} · ${i18n.tipFailRun(dur)}`
+  } else if (seg.tone === 'blocked') {
+    // A run that ended awaiting human input — amber, not a failure.
+    style.background = SEG_TONE.blocked
+    style.opacity = '0.9'
+    title = `${task.title} · ${i18n.tipRunBlocked(dur)}`
   } else {
     style.background = SEG_TONE.run
     style.opacity = '0.92'
@@ -730,6 +735,7 @@ function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }
           jsx('span', { className: 'font-semibold uppercase text-(--ui-text-quaternary)', children: i18n.legSeg }),
           segLegend(SEG_TONE.wait, i18n.legSegWait, true),
           segLegend(SEG_TONE.blocked, i18n.legSegWaitBlocked, true),
+          segLegend(SEG_TONE.blocked, i18n.legSegBlockedRun, false),
           segLegend(SEG_TONE.run, i18n.legSegRun, false),
           segLegend(SEG_TONE.fail, i18n.legSegFail, false),
           segLegend(SEG_TONE.live, i18n.legSegLive, false),
@@ -857,6 +863,7 @@ const GANTT_LOCALES = {
     tipBlockedWait: d => `blocked (waiting ${d})`,
     tipRun: d => `ran ${d}`,
     tipFailRun: d => `failed run (${d})`,
+    tipRunBlocked: d => `ran ${d} · ended blocked (needs input)`,
     tipRunningFor: d => `running (${d} so far)`,
     tipDoneUnknown: 'done (unknown duration)',
     tipDoneRan: d => `done (ran ${d})`,
@@ -868,6 +875,7 @@ const GANTT_LOCALES = {
     legSeg: 'Segments',
     legSegWait: 'Waiting',
     legSegWaitBlocked: 'Blocked wait',
+    legSegBlockedRun: 'Blocked (needs input)',
     legSegRun: 'Run',
     legSegFail: 'Failed run',
     legSegLive: 'Running',
@@ -976,6 +984,7 @@ const GANTT_LOCALES = {
     tipBlockedWait: d => `阻塞中（已等待 ${d}）`,
     tipRun: d => `运行 ${d}`,
     tipFailRun: d => `失败运行（${d}）`,
+    tipRunBlocked: d => `运行 ${d} · 阻塞收尾（需人工）`,
     tipRunningFor: d => `运行中（已运行 ${d}）`,
     tipDoneUnknown: '已完成（时长未知）',
     tipDoneRan: d => `已完成（实际运行 ${d}）`,
@@ -987,6 +996,7 @@ const GANTT_LOCALES = {
     legSeg: '段',
     legSegWait: '等待',
     legSegWaitBlocked: '阻塞等待',
+    legSegBlockedRun: '阻塞收尾',
     legSegRun: '运行段',
     legSegFail: '失败运行',
     legSegLive: '运行中',

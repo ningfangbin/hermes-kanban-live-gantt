@@ -138,20 +138,27 @@ test('barInWindow — bars outside the window are not drawn', () => {
 })
 
 test('taskSegments — wait/run chain: exact spans, ends at now, fail & blocked tones', () => {
-  // multi-run running task: wait → failed run → wait → live run (ends at NOW)
+  // multi-run running task. Classification (user-defined): rate_limited /
+  // timed_out are NORMAL flow → plain run; crashed/broken/gave up → 'fail';
+  // a run that ended awaiting input → 'blocked'.
   const multi = {
-    id: 't_m', status: 'running', created_at: NOW - 10800,
+    id: 't_m', status: 'running', created_at: NOW - 14400,
     runs: [
-      { id: 1, started_at: NOW - 7200, ended_at: NOW - 7000, outcome: 'rate_limited' },
-      { id: 2, started_at: NOW - 3600, ended_at: null, status: 'running' }
+      { id: 0, started_at: NOW - 14400, ended_at: NOW - 13800, outcome: 'rate_limited' }, // normal flow → plain run
+      { id: 1, started_at: NOW - 10800, ended_at: NOW - 10600, outcome: 'crashed' },       // hard failure → red
+      { id: 2, started_at: NOW - 7200, ended_at: NOW - 7100, outcome: 'blocked' },         // needs human → amber
+      { id: 3, started_at: NOW - 3600, ended_at: null, status: 'running' }                 // live
     ]
   }
   assert.deepEqual(
     taskSegments(multi, NOW).map(s => [s.kind, s.tone, s.t0, s.t1]),
     [
-      ['wait', 'wait', NOW - 10800, NOW - 7200],
-      ['run', 'fail', NOW - 7200, NOW - 7000],
-      ['wait', 'wait', NOW - 7000, NOW - 3600],
+      ['run', 'run', NOW - 14400, NOW - 13800],
+      ['wait', 'wait', NOW - 13800, NOW - 10800],
+      ['run', 'fail', NOW - 10800, NOW - 10600],
+      ['wait', 'wait', NOW - 10600, NOW - 7200],
+      ['run', 'blocked', NOW - 7200, NOW - 7100],
+      ['wait', 'wait', NOW - 7100, NOW - 3600],
       ['run', 'live', NOW - 3600, NOW]
     ]
   )

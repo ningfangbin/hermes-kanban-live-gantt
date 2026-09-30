@@ -34,9 +34,9 @@ const STATUS_TONE = {
 // Segment tones — one hue per segment MEANING (see taskSegments).
 export const SEG_TONE = {
   wait:    '#8a9099', // created→run / retry gaps (dashed)
-  blocked: '#e0a13a', // waiting while the task is blocked (dashed, amber)
-  run:     '#5b8def', // finished run span (exact length)
-  fail:    '#ef5350', // failed run span (crashed/failed/timed_out/…)
+  blocked: '#e0a13a', // blocked: waiting (dashed) or a run that ended blocked (solid)
+  run:     '#5b8def', // finished run span (exact length; incl. timed_out / rate_limited)
+  fail:    '#ef5350', // hard failure — crashed / failed / spawn_failed / gave_up
   live:    '#34d399'  // currently running (ends at "now")
 };
 export function statusTone(status) {
@@ -48,9 +48,11 @@ export function statusTone(status) {
  *          last run end → now. `ongoing: true` marks the trailing wait.
  *   run  — one per real run, EXACT span [started_at, ended_at]: never
  *          stretched, never past now; `ongoing: true` while still running.
- *          tone: 'run' | 'fail' (crashed/failed/timed_out/gave_up/blocked) |
- *          'live' (still running). `instant: true` marks a hand-completed
- *          task with no run record (zero-width marker at completed_at).
+ *          tone: 'run' | 'fail' | 'blocked' | 'live': 'fail' = hard failure
+ *          (crashed/failed/spawn_failed/gave_up); 'blocked' = the run ended
+ *          awaiting human input; timed_out / rate_limited are NORMAL workflow
+ *          events → plain 'run'. `instant: true` marks a hand-completed task
+ *          with no run record (zero-width marker at completed_at).
  * Wait tone: 'blocked' while the task is currently blocked, else 'wait'.
  * The renderer clips every segment to the window. */
 export function taskSegments(task, nowSec) {
@@ -110,11 +112,14 @@ export function taskSegments(task, nowSec) {
     if (end == null) {
       end = done ? (task.completed_at != null && task.completed_at > r.s ? task.completed_at : r.s) : now;
     }
-    const failed = ['crashed', 'failed', 'timed_out', 'gave_up', 'blocked', 'rate_limited'].includes(r.outcome);
+    // Hard failures only. timed_out / rate_limited are NORMAL workflow events
+    // (the dispatcher re-runs); an outcome-`blocked` run ended awaiting human
+    // input — neither is a failure.
+    const failed = ['crashed', 'failed', 'spawn_failed', 'gave_up'].includes(r.outcome);
     const live = r.open === true;
     out.push({
       kind: 'run', t0: r.s, t1: end,
-      tone: live ? 'live' : failed ? 'fail' : 'run',
+      tone: live ? 'live' : failed ? 'fail' : r.outcome === 'blocked' ? 'blocked' : 'run',
       ongoing: live, runId: r.id, outcome: r.outcome
     });
     if (end > cursor) cursor = end;

@@ -15,11 +15,11 @@ var SEG_TONE = {
   wait: "#8a9099",
   // created→run / retry gaps (dashed)
   blocked: "#e0a13a",
-  // waiting while the task is blocked (dashed, amber)
+  // blocked: waiting (dashed) or a run that ended blocked (solid)
   run: "#5b8def",
-  // finished run span (exact length)
+  // finished run span (exact length; incl. timed_out / rate_limited)
   fail: "#ef5350",
-  // failed run span (crashed/failed/timed_out/…)
+  // hard failure — crashed / failed / spawn_failed / gave_up
   live: "#34d399"
   // currently running (ends at "now")
 };
@@ -75,13 +75,13 @@ function taskSegments(task, nowSec) {
     if (end == null) {
       end = done ? task.completed_at != null && task.completed_at > r.s ? task.completed_at : r.s : now;
     }
-    const failed = ["crashed", "failed", "timed_out", "gave_up", "blocked", "rate_limited"].includes(r.outcome);
+    const failed = ["crashed", "failed", "spawn_failed", "gave_up"].includes(r.outcome);
     const live = r.open === true;
     out.push({
       kind: "run",
       t0: r.s,
       t1: end,
-      tone: live ? "live" : failed ? "fail" : "run",
+      tone: live ? "live" : failed ? "fail" : r.outcome === "blocked" ? "blocked" : "run",
       ongoing: live,
       runId: r.id,
       outcome: r.outcome
