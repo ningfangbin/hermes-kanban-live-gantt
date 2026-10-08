@@ -305,6 +305,7 @@ if (pageNode) {
   check(flat.includes('kg-live'), 'the running segment renders (live, ends at now)')
   check(flat.indexOf('Running task (today)') < flat.indexOf('Todo created long ago'), 'rows ordered by recency (running first)')
   check(flat.includes('resetWindow'), 'a stored manual window is restored on mount (↺ chip shown)')
+  check(flat.includes('Fixture board'), 'board switcher is rendered in the page header')
   const hourLabels = flat.match(/\b\d{2}:00\b/g) || []
   check(hourLabels.length >= 3, 'zoomed render shows hour tick labels (' + hourLabels.slice(0, 4).join(' ') + ')')
   check(flat.includes('cursor-col-resize'), 'ruler renders the window end handles (drag to move start/end)')

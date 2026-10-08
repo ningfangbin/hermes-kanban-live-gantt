@@ -2162,6 +2162,10 @@ export function KanbanGanttPage() {
                     ]
                   })
                 : null,
+              // The board switcher also lives in the app titlebar band
+              // (titleBar.center, via <Contribute>) — render it here too so it
+              // is discoverable in the page's own toolbar.
+              jsx(TitlebarBoardSwitcher, {}),
               jsx(FilterDropdown, {
                 assignees: derived.allAssignees || [],
                 selectedAssignees,
@@ -2188,8 +2192,8 @@ export function KanbanGanttPage() {
             ]
           }),
 
-          // Board switcher moved to the desktop titlebar band (titleBar.center)
-          // — see TitlebarBoardSwitcher above.
+          // The board switcher sits in the page header above and is mirrored
+          // into the desktop titlebar band (titleBar.center) via <Contribute>.
 
           // Right: window chip (manual only) + zoom chip + Refresh
           jsxs('div', {
