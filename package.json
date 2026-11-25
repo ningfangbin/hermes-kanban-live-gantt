@@ -8,7 +8,7 @@
   "author": "ningfangbin (fork of kanban-gantt by e-is)",
   "repository": {
     "type": "git",
-    "url": "https://192.168.100.203/fangbin.ning/hermes-kanban-live-gantt.git"
+    "url": "https://github.com/ningfangbin/hermes-kanban-live-gantt"
   },
   "scripts": {
     "build": "node scripts/build.mjs",
