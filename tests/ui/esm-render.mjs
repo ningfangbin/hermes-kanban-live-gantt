@@ -65,7 +65,7 @@ export const useQuery = options => {
   const key = options && Array.isArray(options.queryKey) ? options.queryKey.join('|') : ''
   let data
   if (key.includes('|boards')) data = stubQueryData['kanban-live-gantt|boards']
-  else if (key.includes('|gantt')) data = stubQueryData['kanban-live-gantt|gantt']
+  else if (key.includes('|gantt')) data = globalThis.__GANTT_OVERRIDE__ || stubQueryData['kanban-live-gantt|gantt']
   return { data, isLoading: false, isError: false, error: null, refetch: async () => {} }
 }`
 
@@ -105,7 +105,11 @@ const sdkStub = {
   profileColorSoft: () => 'rgba(136,136,136,0.2)',
   queryClient: { invalidateQueries: () => {} },
   useMutation: useMutationStub,
-  usePluginI18n: () => ((path, ...args) => String(path)),
+  // i18n stub: keep the key AND render its arguments, so assertions can see
+  // dynamic copy (e.g. which board failed) rather than only the key.
+  usePluginI18n: () => ((path, ...args) => (args.length
+    ? `${path}(${args.map(a => (Array.isArray(a) ? a.join('|') : String(a))).join(',')})`
+    : String(path))),
   useQuery: () => ({ data: undefined, isLoading: true, isError: false, error: null, refetch: async () => {} }),
   useQueryClient: () => ({ invalidateQueries: () => {} }),
   useValue: useValueImpl
@@ -217,7 +221,12 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 20))
 // 1) import-scan on the raw built source
 // ---------------------------------------------------------------------------
 const src = readFileSync(PLUGIN_PATH, 'utf8')
-const importMatches = src.match(/from\s+["'][^"']+["']/g) || []
+// Comments may contain prose like `from "..."` — strip whole-line comments
+// before scanning for real import statements (string literals untouched).
+const scannable = src
+  .replace(/^\s*\/\*[\s\S]*?\*\/\s*$/gm, '')
+  .replace(/^\s*\/\/.*$/gm, '')
+const importMatches = scannable.match(/from\s+["'][^"']+["']/g) || []
 const allowed = new Set(['from "@hermes/plugin-sdk"', 'from "react"', 'from "react/jsx-runtime"'])
 const illegal = importMatches.map(m => m.trim()).filter(m => !allowed.has(m))
 check(illegal.length === 0, 'loader import-scan: only allowed specifiers' + (illegal.length ? ' — ' + JSON.stringify(illegal) : ''))
@@ -323,6 +332,40 @@ try {
 } catch (err) {
   check(false, 'showDone render threw: ' + (err && err.stack ? err.stack : err))
 }
+
+// ---------------------------------------------------------------------------
+// 5) unreadable-board errors are surfaced, never rendered as an empty board
+// ---------------------------------------------------------------------------
+globalThis.__SHOWDONE__ = false
+globalThis.__GANTT_OVERRIDE__ = {
+  ...gantt,
+  errors: [{ board: '2in1', error: 'OperationalError: database is locked' }],
+  boards: [{ slug: 'fixture', ok: true, tasks: 5, active: 3 }, { slug: '2in1', ok: false, tasks: null, active: null }]
+}
+try {
+  const errored = JSON.stringify(page.render())
+  check(errored.includes('readErrorsTitle'), 'read failures render the banner title (no silent empty view)')
+  check(errored.includes('database is locked'), 'the banner names the failing board and the error')
+  check(errored.includes('readErrorRetry'), 'the banner offers a retry action')
+  check(errored.includes('Running task (today)'), 'readable boards still render alongside the banner')
+} catch (err) {
+  check(false, 'error-banner render threw: ' + (err && err.stack ? err.stack : err))
+}
+
+// ---------------------------------------------------------------------------
+// 6) open work outside the window → hint + jump-to-now, not a blank canvas
+// ---------------------------------------------------------------------------
+delete globalThis.__GANTT_OVERRIDE__
+globalThis.__WINDOW__ = { min: now + 2 * 3600, max: now + 26 * 3600 } // entirely in the future
+try {
+  const future = JSON.stringify(page.render())
+  check(future.includes('outsideWindow'), 'empty window explains that open tasks exist outside it')
+  check(future.includes('jumpToNow'), 'the hint offers jump-to-now')
+  check(!future.includes('Running task (today)'), 'the future window really hides the in-progress task')
+} catch (err) {
+  check(false, 'window-hint render threw: ' + (err && err.stack ? err.stack : err))
+}
+globalThis.__WINDOW__ = null
 
 console.log(failures === 0 ? '\nUI smoke: ALL PASS' : '\nUI smoke: ' + failures + ' FAILURE(S)')
 process.exit(failures === 0 ? 0 : 1)

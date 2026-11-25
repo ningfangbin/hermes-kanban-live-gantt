@@ -285,6 +285,31 @@ export function daySegments(min, max) {
   return out;
 }
 
+/** What the current window shows vs. what the board actually holds — the
+ *  "why is this empty?" diagnostic the page renders as a hint strip.
+ *
+ *  `outOfWindow` counts OPEN tasks whose lifecycle has no bar inside
+ *  [min, max]: they exist on the board, the window simply misses them (a slid
+ *  window past/far from "now" is the usual cause). `hiddenDone` counts `done`
+ *  tasks the showDone toggle keeps out — enabling the toggle may reveal them.
+ *  Archived tasks are never counted: no window and no toggle can show them. */
+export function windowCoverage(tasks: any[], showDone: boolean, nowSec: number, min: number, max: number) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  let active = 0;
+  let visible = 0;
+  let outOfWindow = 0;
+  let hiddenDone = 0;
+  for (const t of list) {
+    if (!t || t.archived || t.status === "archived") continue;
+    const open = isActive(t);
+    if (open) active++;
+    const shown = taskVisible(t, showDone, nowSec, min, max);
+    if (shown) visible++;
+    if (open && !shown) outOfWindow++;
+    if (!open && !shown && !showDone) hiddenDone++;
+  }
+  return { active, visible, outOfWindow, hiddenDone };
+}
 /** Window-consistent visibility: a task shows iff at least one of its
  *  lifecycle segments overlaps the window; `done` additionally requires the
  *  showDone toggle; archived never shows. */

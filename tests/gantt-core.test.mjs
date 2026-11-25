@@ -12,7 +12,7 @@ import {
   taskSegments, taskRecency, shortId, matchesSearch, buildRows,
   isActive, localDayStart, dayStartsBetween, computeRollingDomain, daySegments, taskVisible, barInWindow, hourTickPlan,
   slideWindow, slideWindowByPixels, resizeWindow, MIN_WINDOW, WINDOW_BACK, WINDOW_AHEAD,
-  splitDuration } from '../desktop/gantt-core.js'
+  splitDuration, windowCoverage } from '../desktop/gantt-core.js'
 
 const NOW = 1_800_000_000 // fixed clock for the pure logic tests
 
@@ -267,4 +267,42 @@ test('hourTickPlan — hour scale as you zoom; 15-min minors at the deep end', (
   assert.ok(deep.major.length >= 71 && deep.major.length <= 72, `deep majors: ${deep.major.length}`) // every full hour
   assert.ok(deep.minor.length > 100) // :15/:30/:45
   for (const ts of deep.minor) assert.equal(new Date(ts * 1000).getMinutes() % 15, 0)
+})
+
+test('windowCoverage — tells "empty window" apart from "nothing to show"', () => {
+  const tasks = [
+    // open, long waiting span → visible in any window containing "now"
+    { id: 'a', status: 'todo', created_at: NOW - 5 * DAY },
+    // open, running right now
+    { id: 'b', status: 'running', created_at: NOW - 3600, runs: [{ started_at: NOW - 600, ended_at: null }] },
+    // done, inside the default window
+    { id: 'c', status: 'done', created_at: NOW - 7200, completed_at: NOW - 1800 },
+    // archived — never counted, never shown
+    { id: 'd', status: 'archived', created_at: NOW - 3600, archived: true }
+  ]
+
+  const rolling = computeRollingDomain(NOW)
+  const base = windowCoverage(tasks, false, NOW, rolling.min, rolling.max)
+  assert.equal(base.active, 2)        // a + b (done is not open, archived skipped)
+  assert.equal(base.visible, 2)       // done hidden by default
+  assert.equal(base.outOfWindow, 0)   // every open task has a bar in the window
+  assert.equal(base.hiddenDone, 1)    // c exists but the toggle is off
+
+  const withDone = windowCoverage(tasks, true, NOW, rolling.min, rolling.max)
+  assert.equal(withDone.visible, 3)
+  assert.equal(withDone.hiddenDone, 0)
+
+  // window entirely in the future → open work exists but nothing is inside it
+  const future = { min: NOW + 2 * 3600, max: NOW + 26 * 3600 }
+  const fut = windowCoverage(tasks, false, NOW, future.min, future.max)
+  assert.equal(fut.active, 2)
+  assert.equal(fut.visible, 0)
+  assert.equal(fut.outOfWindow, 2)
+  assert.equal(fut.hiddenDone, 1)
+
+  // empty board → all zeroes, so the page shows "no data", not a window hint
+  assert.deepEqual(windowCoverage([], false, NOW, rolling.min, rolling.max),
+    { active: 0, visible: 0, outOfWindow: 0, hiddenDone: 0 })
+  // tolerate a missing list instead of throwing
+  assert.equal(windowCoverage(undefined, false, NOW, rolling.min, rolling.max).visible, 0)
 })

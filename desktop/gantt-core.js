@@ -213,6 +213,23 @@ function daySegments(min, max) {
   }
   return out;
 }
+function windowCoverage(tasks, showDone, nowSec, min, max) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  let active = 0;
+  let visible = 0;
+  let outOfWindow = 0;
+  let hiddenDone = 0;
+  for (const t of list) {
+    if (!t || t.archived || t.status === "archived") continue;
+    const open = isActive(t);
+    if (open) active++;
+    const shown = taskVisible(t, showDone, nowSec, min, max);
+    if (shown) visible++;
+    if (open && !shown) outOfWindow++;
+    if (!open && !shown && !showDone) hiddenDone++;
+  }
+  return { active, visible, outOfWindow, hiddenDone };
+}
 function taskVisible(task, showDone, nowSec, min, max) {
   if (!task || task.archived || task.status === "archived") return false;
   if (!isActive(task) && !showDone) return false;
@@ -273,5 +290,6 @@ export {
   statusTone,
   taskRecency,
   taskSegments,
-  taskVisible
+  taskVisible,
+  windowCoverage
 };

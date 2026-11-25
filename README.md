@@ -20,6 +20,9 @@ see [Credits & license](#credits--license).
 | Row order | kanban order | **recency desc — running / most recently active on top** (children stay under their parents) |
 | Status colors | official kanban column tones | **own palette** — red = failure only, amber = blocked only, green = live only (see Rendering model) |
 | i18n | en + fr | **en + zh** (full coverage, 95 keys aligned; sidebar/palette labels follow the app language) + straggler French removed |
+| Empty view | blank timeline | **self-explaining** — an unreadable board is reported in a banner (never silently dropped from the aggregate), a window that misses every open task says how many sit outside it and offers *jump to now*, and 0-open-task boards are labelled in the switcher |
+| Board scope | named boards only | **+ the back-compat `default` board** (`<home>/kanban.db`) — the board the CLI calls "current" is selectable and aggregated too |
+| Backend reads | full dump per request | short-lived snapshot cache (**5 s**, `KANBAN_GANTT_CACHE_SECONDS`, `?refresh=1` bypasses), invalidated by every write |
 
 Everything else (board switcher, filters, search, bulk actions, task drawer,
 write endpoints, resizable columns, header chrome) is unchanged.
@@ -34,7 +37,8 @@ dashboard/plugin_api.py# Python backend (FastAPI) — copy of the kanban-gantt b
 dashboard/manifest.json# dashboard manifest (api entrypoint)
 plugin.yaml            # plugin metadata
 tests/gantt-core.test.mjs # core unit tests (run against the built core)
-tests/ui/esm-render.mjs   # UI smoke: import-scan, register, render, done-filtered
+tests/ui/esm-render.mjs   # UI smoke: import-scan, register, render, done-filtered, error banner, window hint
+tests/backend/test_plugin_api.py # backend unittest (unittest, needs fastapi)
 ```
 
 ## Build & test
@@ -44,6 +48,8 @@ npm install          # esbuild
 npm run build        # regenerate desktop/
 npm run check        # node --check on the built halves
 npm test             # core unit tests + UI smoke
+npm run test:backend # backend unittest — needs a Python with fastapi, e.g.
+                     # ~/01_Source/12_hermes-agent/venv/bin/python -m unittest discover -s tests/backend -v
 ```
 
 ## Enable

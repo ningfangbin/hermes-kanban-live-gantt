@@ -80,7 +80,7 @@ const BAR_H = 14                 // px — bar height inside a row
 const ZOOM_MAX_PX_PER_HOUR = 240
 
 /* ────────────────────── gantt-core (pure logic, Node-tested) ─────────────── */
-import { taskSegments, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY, slideWindowByPixels, resizeWindow, splitDuration, SEG_TONE } from './core/gantt-core.ts'
+import { taskSegments, shortId, matchesSearch, buildRows, computeRollingDomain, daySegments, taskVisible, barInWindow, isActive, statusTone, hourTickPlan, localDayStart, WINDOW_BACK, WINDOW_AHEAD, DAY, slideWindowByPixels, resizeWindow, splitDuration, SEG_TONE, windowCoverage } from './core/gantt-core.ts'
 
 /* ──────────────────────────────── data doors ──────────────────────────────── */
 
@@ -813,6 +813,14 @@ const GANTT_LOCALES = {
     noTasksMatch: 'No OPEN tasks match the current search or filters (done tasks are never shown here).',
     emptyBoard: 'No data',
     emptyBoardDesc: board => `Board ${board} has no open tasks.`,
+    readErrorsTitle: 'Some boards could not be read',
+    readErrorsDesc: (boards: string[]) => `The aggregate view is incomplete — ${boards.join(', ')}. Other boards are shown; retry once the board's database is reachable.`,
+    readErrorRetry: 'Retry',
+    boardArchived: 'archived',
+    boardUnreadable: 'unreadable',
+    outsideWindow: (n: number) => `${n} open task${n === 1 ? '' : 's'} exist outside this window.`,
+    jumpToNow: 'Jump to now',
+    hiddenDoneHint: (n: number) => `${n} done task${n === 1 ? '' : 's'} hidden — enable “Done” in the legend to include them.`,
     cannotLoadBoard: 'Cannot load board',
     cannotLoadBoardDesc: base => `Backend kanban-live-gantt unreachable${base ? ` (${base})` : ''} — plugin enabled? app backend restarted?`,
     taskUnreadable: 'Task unreadable',
@@ -934,6 +942,14 @@ const GANTT_LOCALES = {
     noTasksMatch: '没有未完成任务匹配当前搜索或筛选条件（已完成任务不在此视图显示）。',
     emptyBoard: '无数据',
     emptyBoardDesc: board => `看板 ${board} 没有未完成任务。`,
+    readErrorsTitle: '部分看板读取失败',
+    readErrorsDesc: (boards: string[]) => `汇总视图不完整 —— ${boards.join('、')}。其余看板照常显示；等该看板数据库可读后重试。`,
+    readErrorRetry: '重试',
+    boardArchived: '已归档',
+    boardUnreadable: '不可读',
+    outsideWindow: (n: number) => `另有 ${n} 条未完成任务在这个时间窗之外。`,
+    jumpToNow: '跳到现在',
+    hiddenDoneHint: (n: number) => `${n} 条已完成任务已隐藏 —— 在图例里勾选“已完成”即可显示。`,
     cannotLoadBoard: '无法加载看板',
     cannotLoadBoardDesc: base => `后端 kanban-live-gantt 不可达${base ? `（${base}）` : ''} — 插件已启用？应用后端已重启？`,
     taskUnreadable: '任务信息不可读',
@@ -1746,8 +1762,8 @@ function TitlebarBoardSwitcher() {
             className: 'flex min-w-0 items-center gap-1.5',
             children: [
               jsx('span', { className: 'min-w-0 flex-1 truncate text-[0.75rem] font-medium leading-none', children: current?.label || '—' }),
-              current && typeof current.total === 'number'
-                ? jsx('span', { className: 'text-[0.6875rem] tabular-nums text-(--ui-text-quaternary)', children: `${current.total}` })
+              current && typeof current.active === 'number'
+                ? jsx('span', { className: 'text-[0.6875rem] tabular-nums text-(--ui-text-quaternary)', children: `${current.active}` })
                 : null,
               jsx('span', { className: 'text-[9px] opacity-60', children: '▾' })
             ]
@@ -1769,12 +1785,27 @@ function TitlebarBoardSwitcher() {
           }),
           ...boards.map(b => {
             const isCurrent = !isAllBoards && b.slug === (board || data?.current)
+            // A board is never hidden from the switcher: archived tombstones
+            // and unreadable DBs are labelled instead, so "switch and nothing
+            // shows" is never a mystery.
+            const tag = b.error ? i18n.boardUnreadable : b.archived ? i18n.boardArchived : null
+            const count = typeof b.active === 'number' ? b.active : null
             return jsxs(DropdownMenuItem, {
               key: b.slug,
               onClick: () => setBoard(b.slug),
               className: 'flex items-center justify-between text-xs py-1.5 cursor-pointer',
               children: [
                 jsx('span', { className: cn('flex-1 truncate', isCurrent && 'font-semibold text-(--ui-accent)'), children: b.label || b.slug }),
+                tag
+                  ? jsx('span', { className: 'ml-2 rounded px-1 py-px text-[9px] uppercase tracking-wide text-(--ui-text-quaternary) border border-(--ui-stroke-tertiary)', children: tag })
+                  : null,
+                count !== null
+                  ? jsx('span', {
+                      className: cn('ml-2 text-[10px] tabular-nums', count === 0 ? 'text-(--ui-text-quaternary)' : 'text-(--ui-text-tertiary)'),
+                      title: i18n.nTasksTotal(count, ''),
+                      children: `${count}`
+                    })
+                  : null,
                 isCurrent ? jsx(Codicon, { name: 'check', size: '0.8rem', className: 'ml-2' }) : null
               ]
             })
@@ -1883,7 +1914,13 @@ export function KanbanGanttPage() {
     visible = visible.filter(t => matchesSearch(t, search))
     const rows = buildRows(visible, nowSec)
     const allAssignees = Array.from(new Set(data.tasks.map(t => t.assignee).filter(Boolean))).sort()
-    return { rows, domain, total: visible.length, tasks: visible, allAssignees }
+    // "Why is this empty?" diagnostics: the window may simply miss the work
+    // (outOfWindow), or the board may hold nothing but done tasks
+    // (hiddenDone). Computed on the UNFILTERED set so search/filters can't
+    // masquerade as an empty board.
+    const coverage = windowCoverage(data.tasks, showDone, nowSec, domain.min, domain.max)
+    const readErrors = Array.isArray(data.errors) ? data.errors : []
+    return { rows, domain, total: visible.length, tasks: visible, allAssignees, coverage, readErrors }
   }, [data, disabledStatuses, selectedAssignees, search, showDone, win])
 
   const handleToggleCheck = (id, checked, nativeEvent) => {
@@ -1951,6 +1988,18 @@ export function KanbanGanttPage() {
     if (storage) storage.set('board', slug)
     setSearch('')
     void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] })
+  }
+
+  // Manual refresh bypasses the backend's short-lived snapshot cache
+  // (?refresh=1) so the button really re-reads the board, then seeds the
+  // query cache with that snapshot. Falls back to a plain invalidation.
+  const refreshNow = () => {
+    const params = new URLSearchParams()
+    if (board) params.set('board', board)
+    params.set('refresh', '1')
+    void apiFetch(`/gantt?${params.toString()}`)
+      .then((fresh: any) => queryClient.setQueryData(['kanban-live-gantt', 'gantt', apiBase(), board], fresh))
+      .catch(() => { void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] }) })
   }
 
   // Pick the fallback board once the list arrives and none is selected yet.
@@ -2217,11 +2266,58 @@ export function KanbanGanttPage() {
                     children: `×${effZoom >= 10 ? Math.round(effZoom) : effZoom.toFixed(1)}`
                   })
                 : null,
-              jsx(Button, { size: 'xs', onClick: () => void queryClient.invalidateQueries({ queryKey: ['kanban-live-gantt', 'gantt'] }), children: i18n.refresh })
+              jsx(Button, { size: 'xs', onClick: refreshNow, children: i18n.refresh })
             ]
           })
         ]
       }),
+
+      // Read failures must NEVER look like an empty board: a board that failed
+      // to read used to vanish silently from the aggregate, leaving a blank
+      // timeline indistinguishable from a board that really holds no open work.
+      derived.readErrors.length > 0
+        ? jsxs('div', {
+            className: 'mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 flex items-start gap-2 text-[11px]',
+            role: 'status',
+            children: [
+              jsx(Codicon, { name: 'warning', size: '0.9rem', className: 'mt-px text-amber-500 shrink-0' }),
+              jsxs('div', {
+                className: 'flex-1 min-w-0',
+                children: [
+                  jsx('div', { className: 'font-medium', children: i18n.readErrorsTitle }),
+                  jsx('div', {
+                    className: 'text-(--ui-text-tertiary) break-words',
+                    children: i18n.readErrorsDesc(derived.readErrors.map((e: any) => `${e.board}（${e.error}）`))
+                  })
+                ]
+              }),
+              jsx(Button, { size: 'xs', variant: 'ghost', onClick: refreshNow, children: i18n.readErrorRetry })
+            ]
+          })
+        : null,
+
+      // Non-empty board, empty window: say WHY instead of showing a blank
+      // canvas (a slid window past "now" is the classic cause).
+      rows.length === 0 && (derived.coverage.outOfWindow > 0 || derived.coverage.hiddenDone > 0)
+        ? jsxs('div', {
+            className: 'mt-2 rounded-md border border-(--ui-stroke-tertiary) bg-(--ui-bg-elevated) px-3 py-2 flex items-center gap-2 text-[11px] text-(--ui-text-tertiary)',
+            role: 'status',
+            children: [
+              jsx(Codicon, { name: 'info', size: '0.9rem', className: 'shrink-0' }),
+              jsxs('span', {
+                className: 'flex-1 min-w-0',
+                children: [
+                  derived.coverage.outOfWindow > 0 ? i18n.outsideWindow(derived.coverage.outOfWindow) : null,
+                  derived.coverage.outOfWindow > 0 && derived.coverage.hiddenDone > 0 ? ' ' : null,
+                  derived.coverage.hiddenDone > 0 ? i18n.hiddenDoneHint(derived.coverage.hiddenDone) : null
+                ]
+              }),
+              derived.coverage.outOfWindow > 0
+                ? jsx(Button, { size: 'xs', onClick: resetView, children: i18n.jumpToNow })
+                : null
+            ]
+          })
+        : null,
 
       rows.length === 0
         ? jsx('div', {

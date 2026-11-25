@@ -15,10 +15,16 @@ Two run modes:
    Hermes Desktop UI on another machine can point its "backend API" setting at
    a backend that is still in development (CORS enabled by default).
 
-Reads: `/boards` (list), `/gantt?board=<slug>` (snapshot: tasks + labels + link
-graph), `/tasks/<id>?board=<slug>` (full task + comments + events + links).
-Writes go through the *domain layer* (`hermes_cli.kanban_db`) so every
-transition keeps its invariants (parent gating, run closing, event log) —
+Reads: `/boards` (list + per-board counts/archive state/read errors),
+`/gantt?board=<slug>` (snapshot: tasks + labels + link graph, plus `counts`,
+`boards` and `errors`), `/tasks/<id>?board=<slug>` (full task + comments +
+events + links). A board whose database cannot be read is REPORTED in
+`errors` instead of being silently dropped: a dropped board renders as an
+empty timeline, indistinguishable from a board that holds no open work.
+`/gantt` is served from a short-lived snapshot cache
+(`KANBAN_GANTT_CACHE_SECONDS`, default 5 s; `?refresh=1` bypasses; every
+write clears it). Writes go through the *domain layer* (`hermes_cli.kanban_db`)
+so every transition keeps its invariants (parent gating, run closing, event log) —
 `PATCH /tasks/<id>/status` supports done/blocked/unblock/review/reopen/archive,
 plus comment/assign endpoints. Board paths and the current-board pointer are
 resolved by the CORE kanban resolver (`hermes_cli.kanban_db`: HERMES_KANBAN_DB
@@ -39,6 +45,7 @@ import json
 import os
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -58,6 +65,58 @@ _LABEL_RE = re.compile(r"^\s*\[([^\]]+)\]\s*")
 
 VALID_STATUSES = ("triage", "todo", "scheduled", "ready", "running",
                   "blocked", "review", "done", "archived")
+
+#: Snapshot cache TTL (seconds). The Gantt polls every 60 s and several windows
+#: can be open at once; one full dump per second-class tick is plenty, and it
+#: keeps /gantt?board=all (several MB) from being rebuilt per poll. Any write
+#: through this module invalidates it, so a status change is visible at once.
+def _cache_seconds() -> float:
+    try:
+        return max(0.0, float(os.environ.get("KANBAN_GANTT_CACHE_SECONDS", "5") or 5))
+    except ValueError:
+        return 5.0
+
+
+_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_get(slug: str) -> Optional[dict[str, Any]]:
+    ttl = _cache_seconds()
+    if ttl <= 0:
+        return None
+    with _cache_lock:
+        hit = _cache.get(slug)
+        if hit is None:
+            return None
+        stamped, payload = hit
+        if time.time() - stamped < ttl:
+            return payload
+        _cache.pop(slug, None)
+        return None
+
+
+def _cache_put(slug: str, payload: dict[str, Any]) -> None:
+    if _cache_seconds() <= 0:
+        return
+    with _cache_lock:
+        _cache[slug] = (time.time(), payload)
+
+
+def _cache_clear() -> None:
+    with _cache_lock:
+        _cache.clear()
+
+
+def _board_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Total and open (not done/archived) task counts — cheap, used for the
+    board switcher badge and the 'n open tasks outside this window' hint."""
+    total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    active = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE status NOT IN ('done', 'archived')"
+    ).fetchone()[0]
+    return {"tasks": total, "active": active}
+
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +154,15 @@ def _boards_root() -> Path:
         return (Path(home).expanduser()) / "kanban" / "boards"
 
 
+def _default_board_db(boards_root: Path) -> Path:
+    """DB of the back-compat ``default`` board: ``<home>/kanban.db``.
+
+    ``boards_root`` is ``<home>/kanban/boards`` (see kanban_db.boards_root), so
+    the back-compat DB sits two levels up — NOT inside ``boards/default/``.
+    """
+    return boards_root.parent.parent / "kanban.db"
+
+
 def _board_db_path(slug: str) -> Path:
     slug = (slug or "").strip().strip("/")
     if not slug or slug in (".", "..") or "/" in slug or "\\" in slug:
@@ -104,7 +172,10 @@ def _board_db_path(slug: str) -> Path:
         # path (<root>/kanban.db instead of boards/default/kanban.db)
         path = _kb().kanban_db_path(slug)
     except Exception:
-        path = _boards_root() / slug / "kanban.db"
+        # same back-compat layout, standalone (no hermes codebase to ask):
+        # boards_root() is <home>/kanban/boards, so `default` lives one level
+        # above the `kanban/` directory.
+        path = _default_board_db(_boards_root()) if slug == "default" else (_boards_root() / slug / "kanban.db")
     if not path.is_file():
         raise HTTPException(
             status_code=503,
@@ -236,24 +307,67 @@ def _task_detail(conn: sqlite3.Connection, task_id: str) -> dict[str, Any]:
 # Reads
 # ---------------------------------------------------------------------------
 
+def _board_entry(slug: str, label: str, archived: bool) -> dict[str, Any]:
+    """One switcher row: identity + open/total counts, or ``error`` when the DB
+    cannot be read. Never raises — a broken board must stay visible."""
+    entry: dict[str, Any] = {"slug": slug, "label": label, "archived": archived}
+    try:
+        conn = _connect(slug, ro=True)
+        try:
+            entry.update(_board_counts(conn))
+        finally:
+            conn.close()
+    except Exception as exc:
+        entry["error"] = f"{type(exc).__name__}: {exc}"
+        entry["tasks"] = None
+        entry["active"] = None
+    return entry
+
+
 @router.get("/boards")
 def list_boards():
+    """Board list for the switcher, with per-board counts and archive state.
+
+    Includes the back-compat ``default`` board (its DB lives at
+    ``<root>/kanban.db``, not under ``boards/``) — without it the plugin could
+    never show the tasks of the board the CLI/dispatcher calls "current".
+    A board whose DB cannot be read is still listed, carrying ``error``.
+    """
     root = _boards_root()
     boards: list[dict] = []
+
+    # Back-compat default board first: `<home>/kanban.db` (kanban_db_path).
+    default_db = _default_board_db(root)
+    if default_db.is_file():
+        label, archived = "default", False
+        meta = root / "default" / "board.json"
+        if meta.is_file():
+            try:
+                data = json.loads(meta.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    label = str(data.get("name") or label)
+                    archived = bool(data.get("archived"))
+            except Exception:
+                pass
+        boards.append(_board_entry("default", label, archived))
+
     if root.is_dir():
         for d in sorted(p for p in root.iterdir() if p.is_dir()):
-            if not (d / "kanban.db").is_file():
+            if d.name == "default" or not (d / "kanban.db").is_file():
                 continue
             label = d.name
+            archived = False
             board_file = d / "board.json"
             if board_file.is_file():
                 try:
                     data = json.loads(board_file.read_text(encoding="utf-8"))
-                    if isinstance(data, dict) and data.get("name"):
-                        label = str(data["name"])
+                    if isinstance(data, dict):
+                        if data.get("name"):
+                            label = str(data["name"])
+                        archived = bool(data.get("archived"))
                 except Exception:
                     pass
-            boards.append({"slug": d.name, "label": label})
+            boards.append(_board_entry(d.name, label, archived))
     return {"boards": boards, "current": _resolve_board(None)}
 
 
@@ -295,28 +409,44 @@ def _read_gantt(slug: str) -> dict:
             key=lambda item: (-item["count"], item["label"]),
         )
 
+        counts = {"tasks": len(tasks),
+                  "active": sum(1 for t in tasks if t["status"] not in ("done", "archived"))}
+
         return {
             "board": slug,
             "generated_at": int(time.time()),
             "tasks": tasks,
             "labels": labels,
+            "counts": counts,
+            "boards": [{"slug": slug, "ok": True, **counts}],
+            "errors": [],
         }
     finally:
         conn.close()
 
 
 def _read_gantt_all() -> dict:
-    """Snapshot aggregating tasks, runs and labels from ALL discovered boards."""
+    """Snapshot aggregating tasks, runs and labels from ALL discovered boards.
+
+    A board that cannot be read is reported in ``errors`` (and mirrored in
+    ``boards[*].ok``); it is never silently dropped. Without this, one
+    unreadable board — usually the only one with open work — renders as an
+    empty timeline indistinguishable from "the board has no tasks".
+    """
     boards_info = list_boards().get("boards", [])
     all_tasks: list[dict] = []
     label_counts: dict[str, int] = {}
+    errors: list[dict] = []
+    board_stats: list[dict] = []
 
     for b in boards_info:
         bslug = b["slug"]
         try:
             conn = _connect(bslug, ro=True)
             conn.row_factory = sqlite3.Row
-        except Exception:
+        except Exception as exc:
+            errors.append({"board": bslug, "error": f"{type(exc).__name__}: {exc}"})
+            board_stats.append({"slug": bslug, "ok": False, "tasks": None, "active": None})
             continue
         try:
             runs = _run_windows(conn)
@@ -334,6 +464,7 @@ def _read_gantt_all() -> dict:
                 children.setdefault(parent_id, []).append(child_id)
                 parents.setdefault(child_id, []).append(parent_id)
 
+            active = 0
             for row in rows:
                 rec = _task_summary(row, board_slug=bslug)
                 rec["runs"] = []
@@ -341,8 +472,14 @@ def _read_gantt_all() -> dict:
                 rec["children"] = children.get(rec["id"], [])
                 rec["parents"] = parents.get(rec["id"], [])
                 all_tasks.append(rec)
+                if rec["status"] not in ("done", "archived"):
+                    active += 1
                 if rec["label"]:
                     label_counts[rec["label"]] = label_counts.get(rec["label"], 0) + 1
+            board_stats.append({"slug": bslug, "ok": True, "tasks": len(rows), "active": active})
+        except Exception as exc:
+            errors.append({"board": bslug, "error": f"{type(exc).__name__}: {exc}"})
+            board_stats.append({"slug": bslug, "ok": False, "tasks": None, "active": None})
         finally:
             conn.close()
 
@@ -356,14 +493,29 @@ def _read_gantt_all() -> dict:
         "generated_at": int(time.time()),
         "tasks": all_tasks,
         "labels": labels,
+        "counts": {"tasks": len(all_tasks),
+                   "active": sum(1 for t in all_tasks if t["status"] not in ("done", "archived"))},
+        "boards": board_stats,
+        "errors": errors,
     }
 
 
 @router.get("/gantt")
-def get_gantt(board: Optional[str] = Query(None)):
-    """Full board snapshot for the Gantt: tasks + labels + link graph."""
+def get_gantt(board: Optional[str] = Query(None), refresh: bool = Query(False)):
+    """Full board snapshot for the Gantt: tasks + labels + link graph.
+
+    Served from a short-lived snapshot cache (``KANBAN_GANTT_CACHE_SECONDS``,
+    default 5 s; ``refresh=1`` bypasses it) — the desktop view polls every
+    60 s and the aggregate is several MB.
+    """
     slug = _resolve_board(board)
-    return _read_gantt(slug)
+    if not refresh:
+        cached = _cache_get(slug)
+        if cached is not None:
+            return cached
+    payload = _read_gantt(slug)
+    _cache_put(slug, payload)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +596,7 @@ def bulk_change_status(payload: BulkStatusBody, board: Optional[str] = Query(Non
                 results.append({"id": tid, "ok": bool(ok)})
             except Exception as exc:
                 results.append({"id": tid, "ok": False, "error": str(exc)})
+        _cache_clear()
         return {"results": results}
     finally:
         conn.close()
@@ -616,6 +769,7 @@ def change_status(task_id: str, payload: StatusBody, board: Optional[str] = Quer
                 status_code=409,
                 detail=f"transition '{action}' refused for {task_id} (state/parent gating)",
             )
+        _cache_clear()
         return {"ok": True, "task_id": task_id, "action": action}
     finally:
         conn.close()
@@ -648,6 +802,7 @@ def add_comment(task_id: str, payload: CommentBody, board: Optional[str] = Query
         kanban_db.add_comment(conn, task_id,
                               author=payload.author or "gantt",
                               body=payload.body)
+        _cache_clear()
         return {"ok": True}
     finally:
         conn.close()
@@ -675,6 +830,7 @@ def assign(task_id: str, payload: AssignBody, board: Optional[str] = Query(None)
         ok = kanban_db.assign_task(conn, task_id, (payload.profile or "").strip() or None)
         if not ok:
             raise HTTPException(status_code=409, detail=f"assign refused for {task_id}")
+        _cache_clear()
         return {"ok": True, "task_id": task_id}
     finally:
         conn.close()

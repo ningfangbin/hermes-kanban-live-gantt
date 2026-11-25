@@ -13,15 +13,17 @@ const __useMutation = options => ({
   },
   isPending: false
 })
-const __usePluginI18n = () => ((path, ...args) => String(path))
+const __usePluginI18n = () => ((path, ...args) => (args.length
+    ? `${path}(${args.map(a => (Array.isArray(a) ? a.join('|') : String(a))).join(',')})`
+    : String(path)))
 const __useQueryClient = () => ({ invalidateQueries: () => {} })
 const __useValue = a => (a && typeof a.get === 'function' ? a.get() : undefined)
-const stubQueryData = {"kanban-live-gantt|boards":{"boards":[{"slug":"fixture","label":"Fixture board","total":5}],"current":"fixture"},"kanban-live-gantt|gantt":{"total":5,"tasks":[{"id":"t_run","title":"Running task (today)","status":"running","assignee":"alice","created_at":1791418615,"started_at":1791418615,"archived":false,"runs":[{"id":1,"started_at":1791418615,"ended_at":1791418915,"outcome":"rate_limited"},{"id":2,"started_at":1791420415,"ended_at":null,"status":"running"}]},{"id":"t_todo_today","title":"Todo created today","status":"todo","created_at":1791421615,"archived":false},{"id":"t_todo_old","title":"Todo created long ago","status":"todo","created_at":1791129600,"archived":false},{"id":"t_done","title":"DONE task must be hidden","status":"done","created_at":1791415015,"completed_at":1791420415,"archived":false},{"id":"t_arch","title":"ARCHIVED task must be hidden","status":"archived","created_at":1791335815,"archived":true}]}}
+const stubQueryData = {"kanban-live-gantt|boards":{"boards":[{"slug":"fixture","label":"Fixture board","total":5}],"current":"fixture"},"kanban-live-gantt|gantt":{"total":5,"tasks":[{"id":"t_run","title":"Running task (today)","status":"running","assignee":"alice","created_at":1795575643,"started_at":1795575643,"archived":false,"runs":[{"id":1,"started_at":1795575643,"ended_at":1795575943,"outcome":"rate_limited"},{"id":2,"started_at":1795577443,"ended_at":null,"status":"running"}]},{"id":"t_todo_today","title":"Todo created today","status":"todo","created_at":1795578643,"archived":false},{"id":"t_todo_old","title":"Todo created long ago","status":"todo","created_at":1795276800,"archived":false},{"id":"t_done","title":"DONE task must be hidden","status":"done","created_at":1795572043,"completed_at":1795577443,"archived":false},{"id":"t_arch","title":"ARCHIVED task must be hidden","status":"archived","created_at":1795492843,"archived":true}]}}
 const __useQuery = options => {
   const key = options && Array.isArray(options.queryKey) ? options.queryKey.join('|') : ''
   let data
   if (key.includes('|boards')) data = stubQueryData['kanban-live-gantt|boards']
-  else if (key.includes('|gantt')) data = stubQueryData['kanban-live-gantt|gantt']
+  else if (key.includes('|gantt')) data = globalThis.__GANTT_OVERRIDE__ || stubQueryData['kanban-live-gantt|gantt']
   return { data, isLoading: false, isError: false, error: null, refetch: async () => {} }
 }
 const sdk = {
