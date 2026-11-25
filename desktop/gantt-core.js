@@ -1,26 +1,26 @@
 // src/core/gantt-core.ts
 var DAY = 86400;
 var STATUS_TONE = {
-  triage: "var(--ui-text-tertiary)",
-  todo: "var(--ui-text-secondary)",
-  scheduled: "#a78bfa",
-  ready: "#4d9fff",
-  running: "#34d399",
-  blocked: "#e0a13a",
-  review: "#f472b6",
-  done: "#7c8798",
-  archived: "var(--ui-text-quaternary)"
+  triage: "var(--kg-triage)",
+  todo: "var(--kg-todo)",
+  scheduled: "var(--kg-scheduled)",
+  ready: "var(--kg-ready)",
+  running: "var(--kg-live)",
+  blocked: "var(--kg-blocked)",
+  review: "var(--kg-review)",
+  done: "var(--kg-done)",
+  archived: "var(--kg-archived)"
 };
 var SEG_TONE = {
-  wait: "#8a9099",
+  wait: "var(--kg-wait)",
   // created→run / retry gaps (dashed)
-  blocked: "#e0a13a",
+  blocked: "var(--kg-blocked)",
   // blocked: waiting (dashed) or a run that ended blocked (solid)
-  run: "#5b8def",
+  run: "var(--kg-run)",
   // finished run span (exact length; incl. timed_out / rate_limited)
-  fail: "#ef5350",
+  fail: "var(--kg-fail)",
   // hard failure — crashed / failed / spawn_failed / gave_up
-  live: "#34d399"
+  live: "var(--kg-live)"
   // currently running (ends at "now")
 };
 function statusTone(status) {
@@ -271,6 +271,7 @@ export {
   DAY,
   MIN_WINDOW,
   SEG_TONE,
+  STATUS_TONE,
   WINDOW_AHEAD,
   WINDOW_BACK,
   barInWindow,

@@ -16,28 +16,32 @@
  * kept under their parents — see buildRows(). */
 
 export const DAY = 86_400;
-// Status tones — deliberately DIVERGED from the official kanban column colors
-// (kanban-gantt parity was dropped on purpose: the amber/red/blue clusters were
-// indistinguishable in the timeline). Semantics: red = failure only, amber =
-// blocked only, green = live only, pink = review, blue = ready, slate = done.
-const STATUS_TONE = {
-  triage:   'var(--ui-text-tertiary)',
-  todo:     'var(--ui-text-secondary)',
-  scheduled:'#a78bfa',
-  ready:    '#4d9fff',
-  running:  '#34d399',
-  blocked:  '#e0a13a',
-  review:   '#f472b6',
-  done:     '#7c8798',
-  archived: 'var(--ui-text-quaternary)'
+// Status tones — every tone is a CSS custom property so the SAME token feeds
+// both the timeline bars and the row/legend glyphs, and so the light/dark
+// values live in one place (see the palette `:root` block the desktop half
+// injects). Semantics: red = failure only, amber = blocked only, green = live
+// only, pink = review, cyan = ready, slate = done.
+export const STATUS_TONE = {
+  triage:   'var(--kg-triage)',
+  todo:     'var(--kg-todo)',
+  scheduled:'var(--kg-scheduled)',
+  ready:    'var(--kg-ready)',
+  running:  'var(--kg-live)',
+  blocked:  'var(--kg-blocked)',
+  review:   'var(--kg-review)',
+  done:     'var(--kg-done)',
+  archived: 'var(--kg-archived)'
 };
-// Segment tones — one hue per segment MEANING (see taskSegments).
+// Segment tones — one hue per segment MEANING (see taskSegments). Same token
+// table as the status tones: `running` and the live segment deliberately share
+// --kg-live, blocked shares --kg-blocked, so a bar and its row glyph never
+// disagree.
 export const SEG_TONE = {
-  wait:    '#8a9099', // created→run / retry gaps (dashed)
-  blocked: '#e0a13a', // blocked: waiting (dashed) or a run that ended blocked (solid)
-  run:     '#5b8def', // finished run span (exact length; incl. timed_out / rate_limited)
-  fail:    '#ef5350', // hard failure — crashed / failed / spawn_failed / gave_up
-  live:    '#34d399'  // currently running (ends at "now")
+  wait:    'var(--kg-wait)',    // created→run / retry gaps (dashed)
+  blocked: 'var(--kg-blocked)', // blocked: waiting (dashed) or a run that ended blocked (solid)
+  run:     'var(--kg-run)',     // finished run span (exact length; incl. timed_out / rate_limited)
+  fail:    'var(--kg-fail)',    // hard failure — crashed / failed / spawn_failed / gave_up
+  live:    'var(--kg-live)'     // currently running (ends at "now")
 };
 export function statusTone(status) {
   return STATUS_TONE[status] || 'var(--ui-text-secondary)';

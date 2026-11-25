@@ -18,7 +18,8 @@ see [Credits & license](#credits--license).
 | Now marker | none | thin accent **now line** with time label |
 | Bars | full extents, 2 h minimum length, running bars drawn into the future | **lifecycle segments** — dashed waiting spans ↔ exact run spans (never stretched, never past "now"); a row shows iff a segment overlaps the window |
 | Row order | kanban order | **recency desc — running / most recently active on top** (children stay under their parents) |
-| Status colors | official kanban column tones | **own palette** — red = failure only, amber = blocked only, green = live only (see Rendering model) |
+| Status colors | official kanban column tones | **own palette** — red = failure only, amber = blocked only, green = live only; one `--kg-*` token table shared by bars and glyphs, light + dark sets (see Rendering model) |
+| Status coding | colour dot per status | **9 status glyphs** (shape-first) + per-status counts in the legend, colour as the second channel |
 | i18n | en + fr | **en + zh** (full coverage, 95 keys aligned; sidebar/palette labels follow the app language) + straggler French removed |
 | Empty view | blank timeline | **self-explaining** — an unreadable board is reported in a banner (never silently dropped from the aggregate), a window that misses every open task says how many sit outside it and offers *jump to now*, and 0-open-task boards are labelled in the switcher |
 | Board scope | named boards only | **+ the back-compat `default` board** (`<home>/kanban.db`) — the board the CLI calls "current" is selectable and aggregated too |
@@ -98,25 +99,44 @@ the window:
 
 - **Waiting spans — dashed** (`#8a9099`): creation → first run, the gaps
   between runs, and (while the task is unfinished) its last run → *now*. A
-  currently **blocked** task's waiting span is dashed **amber** (`#e0a13a`).
+  currently **blocked** task's waiting span is dashed **amber** (`--kg-blocked`).
 - **Run spans — solid, exact**: `[started_at, ended_at]` at their real
   length — short runs are **never stretched** (below 3 px they collapse to a
   dot marker; zoom in for the exact width). A span still in progress ends at
-  *now* and glows green (`#34d399`); **hard failures** (`crashed`, `failed`,
-  `spawn_failed`, `gave_up`) are red (`#ef5350`); a run that ended
-  **`blocked`** (awaiting human input) is amber (`#e0a13a`); everything else —
+  *now* and glows green (`--kg-live`); **hard failures** (`crashed`, `failed`,
+  `spawn_failed`, `gave_up`) are red (`--kg-fail`); a run that ended
+  **`blocked`** (awaiting human input) is amber (`--kg-blocked`); everything else —
   including `timed_out` and `rate_limited`, which are normal workflow events —
-  is the standard blue (`#5b8def`).
+  is the standard blue (`--kg-run`).
 - **Hand-completed tasks** (no run record) get a waiting span plus a small
   round marker at `completed_at` ("unknown duration").
 
 **Rows** appear iff at least one segment overlaps the window, ordered **by
 recency — running first**; a parent floats up with its subtree, children stay
-nested. **Status colors** (row dot, filter dots, legend) use their own palette
-instead of the kanban column tones: `ready #4d9fff`, `running #34d399`,
-`review #f472b6`, `blocked #e0a13a`, `done #7c8798`, `scheduled #a78bfa`,
-`todo`/`triage` theme grays. Segment tooltips show exact durations ("waiting
-(3h5m so far)", "failed run (12m)").
+nested. Segment tooltips show exact durations ("waiting (3h5m so far)",
+"failed run (12m)").
+
+**Status symbols (v0.1.5).** Every status is a 14 px inline-SVG glyph in the
+row strip, the filter menus, the drawer badge and the legend — colour is the
+second channel, not the only one (WCAG 1.4.1). The nine silhouettes are
+`triage` inbox, `todo` hollow ring, `scheduled` calendar, `ready` arrow,
+`running` 3/4 arc + centre dot, `blocked` octagon with a bold slash, `review`
+eye, `done` filled disc with a knocked-out check (fill-rule=evenodd — never a
+white stroke, rows are zebra-striped) and `archived` box. Measured on the
+rasterised 14 px bitmaps, the closest pair of the 36 pairs differs in 38 % of
+its ink and the median pair in 68 % (an all-circles variant scored 11 %, which
+is why `ready` is a bare arrow and `blocked` an octagon).
+
+**Palette.** One token table (`--kg-*`) feeds both the glyphs and the bars, in
+two sets: `:root` (light) and `:root.dark`, so the app's theme switch is
+enough — no JS. The seven chromatic tones are colour-separated (CIEDE2000 ≥ 19
+on dark / ≥ 16 on light) and every token is ≥ 3:1 against its chrome
+background (WCAG 1.4.11). The five neutral tones (`wait`, `triage`, `todo`,
+`done`, `archived`) are one grey ladder on purpose: shape tells them apart.
+`running` and the live segment share `--kg-live`, `blocked` shares
+`--kg-blocked`, so a row and its bar can never disagree. The legend lists the
+eight statuses that can render (archived tasks never do) with a live count
+each; clicking one still toggles its visibility.
 
 ## Free zoom (hour granularity)
 
@@ -148,3 +168,9 @@ Model v0.1.3 additions: lifecycle segments (dashed waiting spans; exact run
 spans that never pass "now"), recency-descending rows (running first), and a
 re-designed non-kanban color palette (red = failure only, amber = blocked
 only, green = live only).
+
+Model v0.1.5 additions: nine status glyphs replace the colour dots (shape is
+the primary cue, measured 38 %/68 % ink separation), and the palette became a
+single `--kg-*` token table with measured light/dark values — the previous two
+hardcoded tables collided (wait/done ΔE00 4.9, run/ready 6.8; now 16.9 and
+22.1).

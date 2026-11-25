@@ -438,7 +438,6 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
   const segs = taskSegments(task, now).filter(s => barInWindow(s, min, max))
   const label = task.label ? `[${task.label}]` : ''
   const name = cleanTitle(task.title, task.label, i18n.untitled)
-  const isBlocked = task.status === 'blocked'
 
   const connector = isChild
     ? jsx('span', {
@@ -515,13 +514,11 @@ function TaskRow({ task, depth, isChild, now, pxPerSec, min, max, timelineW, onO
             className: 'shrink-0 rounded cursor-pointer mr-1',
             'aria-label': i18n.tipSelect(name)
           }),
-          isBlocked
-            ? jsx('span', {
-                className: 'inline-flex items-center justify-center shrink-0 text-[#e0a13a]',
-                title: i18n.tipBlocked,
-                children: jsx(Codicon, { name: 'warning', size: '0.85rem' })
-              })
-            : jsx('span', { className: 'h-1.5 w-1.5 rounded-full shrink-0 self-center ml-0.5', style: { backgroundColor: dotColor } }),
+          jsx('span', {
+            className: 'inline-flex items-center justify-center shrink-0 w-[14px]',
+            title: `${i18n.col?.[task.status] || STATUS_META[task.status]?.label || task.status}`,
+            children: jsx(StatusGlyph, { status: task.status, size: 14 })
+          }),
           showBoardBadge && task.board
             ? jsx(Badge, {
                 size: 'xs',
@@ -640,7 +637,7 @@ function FilterDropdown({
               onClick: () => onToggleStatus(s),
               className: 'flex items-center gap-2 cursor-pointer text-xs py-1.5',
               children: [
-                jsx('span', { className: 'h-2 w-2 rounded-full shrink-0', style: { backgroundColor: meta.tone } }),
+                jsx(StatusGlyph, { status: s, size: 16 }),
                 jsx('span', { className: cn('flex-1', !isVisible && 'line-through opacity-50'), children: label }),
                 isVisible ? jsx(Codicon, { name: 'check', size: '0.8rem', className: 'ml-auto' }) : null
               ]
@@ -654,7 +651,7 @@ function FilterDropdown({
             title: i18n.showDoneHint,
             className: 'flex items-center gap-2 cursor-pointer text-xs py-1.5',
             children: [
-              jsx('span', { className: 'h-2 w-2 rounded-full shrink-0', style: { backgroundColor: STATUS_META.done.tone } }),
+              jsx(StatusGlyph, { status: 'done', size: 16 }),
               jsx('span', { className: cn('flex-1', !showDone && 'line-through opacity-50'), children: i18n.col?.done || STATUS_META.done.label }),
               showDone ? jsx(Codicon, { name: 'check', size: '0.8rem', className: 'ml-auto' }) : null
             ]
@@ -665,29 +662,31 @@ function FilterDropdown({
   })
 }
 
-function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }) {
+function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone, statusCounts }) {
   const i18n = useGanttI18n()
-  const item = (statusKey, color, txt) => {
-    const isExcluded = disabledStatuses ? disabledStatuses.has(statusKey) : false
-    const label = i18n.col?.[statusKey] || txt
+  // One legend entry per status that can appear in the timeline: the glyph is
+  // the primary cue, the count is the "how much is in this state right now"
+  // reading. `archived` is absent on purpose — archived tasks never render.
+  const item = (statusKey, isExcluded, onToggle, hint) => {
+    const label = i18n.col?.[statusKey] || STATUS_META[statusKey]?.label || statusKey
+    const count = statusCounts ? (statusCounts[statusKey] || 0) : null
     return jsxs('button', {
       type: 'button',
-      onClick: onToggleStatus ? () => onToggleStatus(statusKey) : undefined,
+      onClick: onToggle,
+      'data-status': statusKey,
+      'data-count': count == null ? undefined : count,
       className: cn(
         'inline-flex items-center gap-1.5 text-[10px] cursor-pointer bg-transparent border-0 p-0 select-none transition-opacity hover:opacity-100',
         isExcluded ? 'opacity-40 line-through text-(--ui-text-quaternary)' : 'text-(--ui-text-tertiary)'
       ),
-      title: isExcluded ? i18n.legendShow(label) : i18n.legendHide(label),
+      title: hint,
       children: [
-        jsx('div', {
-          className: 'h-2 w-3 rounded-xs shrink-0',
-          style: { backgroundColor: color, opacity: isExcluded ? 0.3 : 1 }
-        }),
-        jsx('span', { children: label })
+        jsx(StatusGlyph, { status: statusKey, size: 14 }),
+        jsx('span', { className: 'text-(--ui-text-secondary)', children: label }),
+        count == null ? null : jsx('span', { className: 'tabular-nums opacity-70', children: String(count) })
       ]
     })
   }
-  const doneLabel = i18n.col?.done || STATUS_META.done.label
   const segLegend = (color, label, dashed, isDot) => jsxs('span', {
     className: 'inline-flex items-center gap-1.5',
     children: [
@@ -705,29 +704,14 @@ function Legend({ disabledStatuses, onToggleStatus, showDone, onToggleShowDone }
   return jsxs('div', {
     className: 'flex flex-wrap items-center gap-3 pt-2 border-t border-(--ui-stroke-tertiary)/50 shrink-0 mt-auto select-none',
     children: [
-      item('ready', '#4d9fff', 'Ready'),
-      item('running', '#34d399', 'Running'),
-      item('review', '#f472b6', 'Review'),
-      item('blocked', '#e0a13a', 'Blocked'),
-      item('scheduled', '#a78bfa', 'Scheduled'),
-      item('todo', 'var(--ui-text-secondary)', 'Todo'),
-      item('triage', 'var(--ui-text-tertiary)', 'Triage'),
-      jsxs('button', {
-        type: 'button',
-        onClick: onToggleShowDone,
-        className: cn(
-          'inline-flex items-center gap-1.5 text-[10px] cursor-pointer bg-transparent border-0 p-0 select-none transition-opacity hover:opacity-100',
-          showDone ? 'text-(--ui-text-tertiary)' : 'opacity-40 line-through text-(--ui-text-quaternary)'
-        ),
-        title: i18n.showDoneHint,
-        children: [
-          jsx('div', {
-            className: 'h-2 w-3 rounded-xs shrink-0',
-            style: { backgroundColor: STATUS_META.done.tone, opacity: showDone ? 1 : 0.3 }
-          }),
-          jsx('span', { children: doneLabel })
-        ]
-      }),
+      item('running', disabledStatuses?.has('running'), () => onToggleStatus('running'), i18n.legendHide(i18n.col?.running || STATUS_META.running.label)),
+      item('blocked', disabledStatuses?.has('blocked'), () => onToggleStatus('blocked'), i18n.legendHide(i18n.col?.blocked || STATUS_META.blocked.label)),
+      item('review', disabledStatuses?.has('review'), () => onToggleStatus('review'), i18n.legendHide(i18n.col?.review || STATUS_META.review.label)),
+      item('ready', disabledStatuses?.has('ready'), () => onToggleStatus('ready'), i18n.legendHide(i18n.col?.ready || STATUS_META.ready.label)),
+      item('scheduled', disabledStatuses?.has('scheduled'), () => onToggleStatus('scheduled'), i18n.legendHide(i18n.col?.scheduled || STATUS_META.scheduled.label)),
+      item('todo', disabledStatuses?.has('todo'), () => onToggleStatus('todo'), i18n.legendHide(i18n.col?.todo || STATUS_META.todo.label)),
+      item('triage', disabledStatuses?.has('triage'), () => onToggleStatus('triage'), i18n.legendHide(i18n.col?.triage || STATUS_META.triage.label)),
+      item('done', !showDone, onToggleShowDone, i18n.showDoneHint),
       // Segment legend (non-interactive) — one hue per segment meaning.
       jsxs('div', {
         className: 'w-full flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[10px] text-(--ui-text-tertiary)',
@@ -1070,19 +1054,102 @@ function useGanttI18n() {
 
 /* ─────────────────────────── task drawer (read+write) ─────────────────────── */
 
-// Status tone — DIVERGED from the official kanban column colors on purpose
-// (v0.1.3 palette: red = failure only, amber = blocked only, green = live
-// only, pink = review, blue = ready, slate = done) for timeline readability.
-const STATUS_META = {
-  triage:    { tone: 'var(--ui-text-tertiary)', label: 'Triage' },
-  todo:      { tone: 'var(--ui-text-secondary)', label: 'Todo' },
-  scheduled: { tone: '#a78bfa', label: 'Scheduled' },
-  ready:     { tone: '#4d9fff', label: 'Ready' },
-  running:   { tone: '#34d399', label: 'Running' },
-  blocked:   { tone: '#e0a13a', label: 'Blocked' },
-  review:    { tone: '#f472b6', label: 'Review' },
-  done:      { tone: '#7c8798', label: 'Done' },
-  archived:  { tone: 'var(--ui-text-quaternary)', label: 'Archived' }
+/* ────────────────────── status glyphs (v0.1.5) ──────────────────────────────
+ * Nine statuses, nine distinct silhouettes. Colour is the SECOND channel: the
+ * shapes stay readable at 14 px in greyscale, which is why the row strip no
+ * longer depends on 6 px colour dots (WCAG 1.4.1 — do not encode meaning in
+ * colour alone).
+ *
+ * Measured (rasterised at 14 px, stroke 1.7, ink-difference between every pair
+ * of the 36 pairs): the closest pair differs in 38 % of its ink, the median
+ * pair in 68 %. An all-circles variant scored 11 % — that is why `ready` is a
+ * bare arrow, `blocked` an octagon and `done` a filled disc, not circles with
+ * a small mark inside.
+ *
+ * Filled shapes (`done`) knock the inner mark out with fill-rule=evenodd, never
+ * with a white stroke: rows are zebra-striped and a white halo would show.
+ */
+const GLYPH_SHAPES: Record<string, [string, Record<string, unknown>][]> = {
+  triage: [
+    ['path', { d: 'M2 8.4V11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V8.4' }],
+    ['path', { d: 'M2 8.4h3l1 1.5h2l1-1.5h3' }],
+    ['path', { d: 'M7 2.2v4.4m0 0 1.8-1.8M7 6.6 5.2 4.8' }]
+  ],
+  todo: [['circle', { cx: 7, cy: 7, r: 4.8, 'stroke-width': 1.5 }]],
+  scheduled: [
+    ['rect', { x: 2.4, y: 3.3, width: 9.2, height: 8.2, rx: 1.1 }],
+    ['path', { d: 'M2.4 5.9h9.2M5 2.4v1.6M9 2.4v1.6' }]
+  ],
+  ready: [['path', { d: 'M2.4 7h7.4m0 0L6.6 3.8M9.8 7 6.6 10.2', 'stroke-width': 2.1 }]],
+  running: [
+    ['path', { d: 'M11.4 8.6A4.8 4.8 0 1 1 8.6 2.3', 'stroke-width': 1.9 }],
+    ['path', { d: 'M6.85 7h.3', 'stroke-width': 2.6 }]
+  ],
+  blocked: [
+    ['path', { d: 'M11.6 8.9 8.9 11.6 5.1 11.6 2.4 8.9 2.4 5.1 5.1 2.4 8.9 2.4 11.6 5.1Z' }],
+    ['path', { d: 'M4.2 4.2 9.8 9.8', 'stroke-width': 2 }]
+  ],
+  review: [
+    ['path', { d: 'M1.6 7S3.7 3.8 7 3.8 12.4 7 12.4 7 10.3 10.2 7 10.2 1.6 7 1.6 7Z' }],
+    ['circle', { cx: 7, cy: 7, r: 1.6, fill: 'currentColor', stroke: 'none' }]
+  ],
+  done: [
+    ['path', {
+      // filled disc + check knocked out (evenodd)
+      d: 'M7 2.1a4.9 4.9 0 1 0 0 9.8 4.9 4.9 0 1 0 0-9.8Z '
+        + 'M3.69 7.81L6.34 10.38L10.35 5.97L8.85 4.63L6.26 7.62L5.11 6.39Z',
+      'fill-rule': 'evenodd',
+      fill: 'currentColor',
+      stroke: 'none'
+    }]
+  ],
+  archived: [
+    ['path', {
+      d: 'M2.8 2.9h8.4a.7.7 0 0 1 .7.7v1a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7v-1a.7.7 0 0 1 .7-.7Z',
+      fill: 'currentColor',
+      stroke: 'none'
+    }],
+    ['path', { d: 'M3.3 5.5V11a.8.8 0 0 0 .8.8h5.8a.8.8 0 0 0 .8-.8V5.5' }],
+    ['path', { d: 'M5.9 8.3h2.2' }]
+  ]
+}
+
+/** The 9 status symbols. `title` (when given) makes the glyph the accessible
+ *  name of the row instead of decoration. */
+function StatusGlyph({ status, size = 14, title = null }: { status: string; size?: number; title?: string | null }) {
+  const shapes = GLYPH_SHAPES[status] || GLYPH_SHAPES.todo
+  return jsx('svg', {
+    className: 'kg-glyph',
+    width: size,
+    height: size,
+    viewBox: '0 0 14 14',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': 1.7,
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+    style: { color: statusTone(status), flex: '0 0 auto' },
+    'data-glyph': status,
+    role: title ? 'img' : undefined,
+    'aria-label': title || undefined,
+    'aria-hidden': title ? undefined : 'true',
+    children: shapes.map(([tag, props], i: number) => jsx(tag, { ...props, key: i }))
+  })
+}
+
+// Status tone — every tone is the SAME CSS token the timeline bars use
+// (gantt-core's STATUS_TONE), so a row symbol and its segments can never drift
+// apart. Semantics: red = failure only, amber = blocked only, green = live only.
+const STATUS_META: Record<string, { tone: string; label: string }> = {
+  triage:    { tone: statusTone('triage'), label: 'Triage' },
+  todo:      { tone: statusTone('todo'), label: 'Todo' },
+  scheduled: { tone: statusTone('scheduled'), label: 'Scheduled' },
+  ready:     { tone: statusTone('ready'), label: 'Ready' },
+  running:   { tone: statusTone('running'), label: 'Running' },
+  blocked:   { tone: statusTone('blocked'), label: 'Blocked' },
+  review:    { tone: statusTone('review'), label: 'Review' },
+  done:      { tone: statusTone('done'), label: 'Done' },
+  archived:  { tone: statusTone('archived'), label: 'Archived' }
 }
 const STATUS_ORDER = ['triage', 'todo', 'ready', 'blocked', 'running', 'review', 'done']
 
@@ -1205,7 +1272,7 @@ function SelectionBar({
                   onClick: () => { setMenu(null); onStatus(s) },
                   className: 'flex items-center gap-2 cursor-pointer text-xs py-1.5',
                   children: [
-                    jsx('span', { className: 'h-2 w-2 rounded-full shrink-0', style: { backgroundColor: meta.tone } }),
+                    jsx(StatusGlyph, { status: s, size: 14 }),
                     jsx('span', { className: 'flex-1', children: label })
                   ]
                 })
@@ -1306,7 +1373,7 @@ function StatusBadge({ status, onPick, disabled }) {
       style: { background: `color-mix(in srgb, ${meta.tone} 18%, transparent)`, color: 'inherit', border: `1px solid color-mix(in srgb, ${meta.tone} 45%, transparent)` },
       children: [
         isRunning ? jsx('div', { className: 'kg-arc', style: { '--kanban-tone': meta.tone } }) : null,
-        jsx('span', { className: 'h-2 w-2 rounded-full', style: { backgroundColor: meta.tone } }),
+        jsx(StatusGlyph, { status, size: 14 }),
         jsx('span', { children: label }),
         jsx('span', { className: 'text-[9px] opacity-60', children: '▾' })
       ]
@@ -1324,7 +1391,7 @@ function StatusBadge({ status, onPick, disabled }) {
           onClick: () => { if (!current) onPick(s) },
           disabled: current,
           children: [
-            jsx('span', { className: 'h-2 w-2 rounded-full shrink-0', style: { backgroundColor: m.tone } }),
+            jsx(StatusGlyph, { status: s, size: 14 }),
             jsx('span', { className: 'flex-1', children: l }),
             current ? jsx('span', { className: 'opacity-60', children: '✓' }) : null
           ]
@@ -1920,7 +1987,11 @@ export function KanbanGanttPage() {
     // masquerade as an empty board.
     const coverage = windowCoverage(data.tasks, showDone, nowSec, domain.min, domain.max)
     const readErrors = Array.isArray(data.errors) ? data.errors : []
-    return { rows, domain, total: visible.length, tasks: visible, allAssignees, coverage, readErrors }
+    // Legend counts — over the whole board, not the filtered view, so a filter
+    // never makes a status look empty.
+    const statusCounts = {}
+    for (const t of data.tasks) statusCounts[t.status] = (statusCounts[t.status] || 0) + 1
+    return { rows, domain, total: visible.length, tasks: visible, allAssignees, coverage, readErrors, statusCounts }
   }, [data, disabledStatuses, selectedAssignees, search, showDone, win])
 
   const handleToggleCheck = (id, checked, nativeEvent) => {
@@ -2406,7 +2477,7 @@ export function KanbanGanttPage() {
           }),
 
       jsx('div', {
-        children: jsx(Legend, { disabledStatuses, onToggleStatus: handleToggleStatus, showDone, onToggleShowDone: handleToggleShowDone })
+        children: jsx(Legend, { disabledStatuses, onToggleStatus: handleToggleStatus, showDone, onToggleShowDone: handleToggleShowDone, statusCounts: derived?.statusCounts })
       })
         ]
       }),
@@ -2466,6 +2537,33 @@ const plugin = {
 @keyframes kg-arc-spin { to { --kg-arc-angle: 360deg; } }
 `
       document.head.appendChild(style)
+    }
+
+    // Status/segment palette (v0.1.5) — ONE token table for both the timeline
+    // bars and the status glyphs, in two measured sets (light / dark) so the
+    // app's own theme switch is enough (no JS). Measured: the seven chromatic
+    // tones are colour-separated (ΔE00 ≥ 19 dark / 16 light) and every token is
+    // ≥ 3:1 against its chrome background (WCAG 1.4.11); the five neutral tones
+    // form one grey ladder on purpose — shape, not hue, tells them apart.
+    if (!document.getElementById('kg-palette-style')) {
+      const pal = document.createElement('style')
+      pal.id = 'kg-palette-style'
+      pal.textContent = `
+:root {
+  --kg-wait:#6b7480; --kg-triage:#767e89; --kg-todo:#454d59;
+  --kg-done:#59636f; --kg-archived:#838b96;
+  --kg-run:#1a5cbf; --kg-live:#0a8f5f; --kg-blocked:#9a6b10; --kg-fail:#c62828;
+  --kg-scheduled:#7a52e8; --kg-ready:#00707f; --kg-review:#a8388f;
+}
+:root.dark {
+  --kg-wait:#8f96a1; --kg-triage:#a7aeb9; --kg-todo:#c3c9d2;
+  --kg-done:#626a76; --kg-archived:#7c838e;
+  --kg-run:#4c8dff; --kg-live:#2fbf8f; --kg-blocked:#e0a13a; --kg-fail:#ef5350;
+  --kg-scheduled:#b9a3ff; --kg-ready:#16a8c4; --kg-review:#e879c0;
+}
+.kg-glyph { display: block; }
+`
+      document.head.appendChild(pal)
     }
 
     const tr = (key: string, fallback: string): string => ctx.i18n && typeof ctx.i18n.t === 'function'

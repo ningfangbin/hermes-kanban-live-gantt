@@ -201,11 +201,11 @@ test('shortId / matchesSearch / statusTone basics', () => {
   assert.equal(matchesSearch({ title: 'Fix the parser' }, 'nomatch'), false)
   assert.equal(matchesSearch({ title: 'x' }, ''), true)
   // v0.1.3 palette: red = failure only, amber = blocked, green = live, pink = review
-  assert.equal(statusTone('running'), '#34d399')
-  assert.equal(statusTone('blocked'), '#e0a13a')
-  assert.equal(statusTone('review'), '#f472b6')
-  assert.equal(statusTone('ready'), '#4d9fff')
-  assert.equal(statusTone('done'), '#7c8798')
+  assert.equal(statusTone('running'), 'var(--kg-live)')
+  assert.equal(statusTone('blocked'), 'var(--kg-blocked)')
+  assert.equal(statusTone('review'), 'var(--kg-review)')
+  assert.equal(statusTone('ready'), 'var(--kg-ready)')
+  assert.equal(statusTone('done'), 'var(--kg-done)')
   assert.equal(statusTone('unknown-status'), 'var(--ui-text-secondary)')
 })
 
@@ -243,12 +243,12 @@ test('taskRecency — running now > last run > created (never-run)', () => {
   assert.equal(taskRecency({ status: 'done', completed_at: NOW - 600 }, NOW), NOW - 600)
 })
 
-test('SEG_TONE sanity — one hue per segment meaning', () => {
-  assert.equal(SEG_TONE.wait, '#8a9099')
-  assert.equal(SEG_TONE.blocked, '#e0a13a')
-  assert.equal(SEG_TONE.run, '#5b8def')
-  assert.equal(SEG_TONE.fail, '#ef5350')
-  assert.equal(SEG_TONE.live, '#34d399')
+test('SEG_TONE sanity — one token per segment meaning', () => {
+  assert.equal(SEG_TONE.wait, 'var(--kg-wait)')
+  assert.equal(SEG_TONE.blocked, 'var(--kg-blocked)')
+  assert.equal(SEG_TONE.run, 'var(--kg-run)')
+  assert.equal(SEG_TONE.fail, 'var(--kg-fail)')
+  assert.equal(SEG_TONE.live, 'var(--kg-live)')
   assert.equal(DAY, 86400)
 })
 
@@ -305,4 +305,33 @@ test('windowCoverage — tells "empty window" apart from "nothing to show"', () 
     { active: 0, visible: 0, outOfWindow: 0, hiddenDone: 0 })
   // tolerate a missing list instead of throwing
   assert.equal(windowCoverage(undefined, false, NOW, rolling.min, rolling.max).visible, 0)
+})
+
+// ---------------------------------------------------------------------------
+// Palette tokens (v0.1.5): one table for bars AND status glyphs, and the two
+// must never drift apart again — the previous palette had two hardcoded hex
+// tables that collided (wait/done ΔE00 4.9, run/ready 6.8).
+// ---------------------------------------------------------------------------
+const STATUS_KEYS = ['triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review', 'done', 'archived']
+const SEG_KEYS = ['wait', 'blocked', 'run', 'fail', 'live']
+
+test('palette — every tone is a CSS token, not a hardcoded hex', () => {
+  for (const s of STATUS_KEYS) {
+    assert.match(statusTone(s), /^var\(--kg-[a-z]+\)$/, `status tone for ${s} must be a --kg-* token`)
+  }
+  for (const k of SEG_KEYS) {
+    assert.match(SEG_TONE[k], /^var\(--kg-[a-z]+\)$/, `segment tone ${k} must be a --kg-* token`)
+  }
+  // unknown status still resolves to something renderable
+  assert.equal(statusTone('nope'), 'var(--ui-text-secondary)')
+})
+
+test('palette — a status and its segment share the same token', () => {
+  // running rows and live segments must agree, blocked rows and blocked waits too
+  assert.equal(statusTone('running'), SEG_TONE.live)
+  assert.equal(statusTone('blocked'), SEG_TONE.blocked)
+  // no two statuses may point at the same token (that is how the old palette
+  // ended up with two blues nobody could tell apart)
+  const tokens = STATUS_KEYS.map(statusTone)
+  assert.equal(new Set(tokens).size, STATUS_KEYS.length, 'each status needs its own token')
 })

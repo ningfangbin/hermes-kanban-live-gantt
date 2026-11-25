@@ -229,6 +229,20 @@ const scannable = src
 const importMatches = scannable.match(/from\s+["'][^"']+["']/g) || []
 const allowed = new Set(['from "@hermes/plugin-sdk"', 'from "react"', 'from "react/jsx-runtime"'])
 const illegal = importMatches.map(m => m.trim()).filter(m => !allowed.has(m))
+// v0.1.5: the status/segment palette must be CSS tokens, not per-render hex.
+// The old hardcoded table is what let two hues collide (ΔE00 4.9 / 6.8).
+// Values the v0.1.4 table scattered through render code and that the v0.1.5
+// palette replaced outright — none may survive anywhere in the bundle.
+const LEGACY_HEX = ['#8a9099', '#5b8def', '#34d399', '#a78bfa', '#4d9fff', '#f472b6', '#7c8798']
+const legacyLeft = LEGACY_HEX.filter(h => src.includes(h))
+check(legacyLeft.length === 0, 'no legacy palette hex in the bundle' + (legacyLeft.length ? ' — ' + legacyLeft.join(',') : ''))
+// The red/amber anchors keep their hue and may appear exactly once (the dark
+// token set) — never again as a per-render literal.
+for (const anchorHex of ['#ef5350', '#e0a13a']) {
+  const n = src.split(anchorHex).length - 1
+  check(n <= 1, anchorHex + ' appears only in the palette (' + n + ' occurrence(s))')
+}
+check(src.includes('--kg-run') && src.includes(':root.dark'), 'bundle ships the light + dark token sets')
 check(illegal.length === 0, 'loader import-scan: only allowed specifiers' + (illegal.length ? ' — ' + JSON.stringify(illegal) : ''))
 
 // ---------------------------------------------------------------------------
@@ -319,6 +333,17 @@ if (pageNode) {
   check(hourLabels.length >= 3, 'zoomed render shows hour tick labels (' + hourLabels.slice(0, 4).join(' ') + ')')
   check(flat.includes('cursor-col-resize'), 'ruler renders the window end handles (drag to move start/end)')
   check(flat.includes('dragWindowStart') && flat.includes('dragWindowEnd'), 'window handles carry their i18n tooltips')
+
+  // v0.1.5 — every status is a glyph, not a colour dot: the legend must expose
+  // one symbol per status (archived excepted: it never renders) and carry the
+  // per-status count.
+  const STATUS_GLYPHS = ['triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review', 'done']
+  const missing = STATUS_GLYPHS.filter(s => !flat.includes('"data-glyph":"' + s + '"'))
+  check(missing.length === 0, 'legend renders all 8 status glyphs' + (missing.length ? ' — missing ' + missing.join(',') : ''))
+  check(!flat.includes('"data-glyph":"archived"'), 'archived has no legend entry (archived tasks never render)')
+  check(flat.includes('"data-count":1'), 'legend carries the running count (fixture: 1)')
+  check(flat.includes('"data-count":2'), 'legend carries the todo count (fixture: 2)')
+  check(!/h-1\.5 w-1\.5 rounded-full|h-2 w-2 rounded-full/.test(flat), 'no colour-only dots left in the rendered tree')
 }
 
 // ---------------------------------------------------------------------------
